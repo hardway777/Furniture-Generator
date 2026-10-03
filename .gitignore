@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Blender: .blend1/.blend2 are automatic backups, one per save
+*.blend1
+*.blend2
+*.blend[0-9]
+
+# Local backups and scratch
+*.bak
+*.orig
+*.rej
+~$*
+
+# Whole-project backup mirror (backup.cmd writes here before risky operations)
+Backup/
+
+# Scratch: extracted texture source packs and render output are working data,
+# not sources (Art/_0 alone is ~500 MB of MaterialX/USD textures)
+Art/_0/
+
+# Agent file leases (lock.py): runtime coordination, never committed
+.locks/
+
+# Agent scratch: throwaway probe scripts written during an investigation, never sources
+.agent_tmp/
+
+# Editors / environments
+.idea/
+.vscode/
+.venv/
+venv/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+BUILD/
+/.koda

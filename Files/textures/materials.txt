@@ -1,0 +1,7 @@
+# Material name -> texture set prefix.
+# Files are named {set}_{map}.{ext} (basecolor / normal / roughness / metallic).
+# A material with no line here uses its own name as the set prefix.
+# Lines starting with # are comments.
+
+MI_WoodDark_01 = T_WoodDark_01
+MI_WoodLight_01 = T_WoodLight_001

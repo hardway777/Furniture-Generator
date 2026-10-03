@@ -1,0 +1,24 @@
+# This project is edited only under Windows, and the source is executed from a
+# Blender text block saved by Notepad++/IDE. Line endings are therefore CRLF on
+# purpose - do not "fix" them.
+#
+# Without this file git stores whatever the last writer produced, so the working
+# tree flips between LF and CRLF on every checkout/clone. That silently breaks
+# two things: every diff shows the whole file as changed, and git blame becomes
+# useless across such a commit.
+
+* text=auto eol=crlf
+
+# Stated explicitly so a future tool or contributor cannot reinterpret them.
+*.py text eol=crlf
+*.md text eol=crlf
+*.txt text eol=crlf
+
+# Binary payloads must never be touched.
+*.blend binary
+*.pyc binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.fbx binary
+*.glb binary

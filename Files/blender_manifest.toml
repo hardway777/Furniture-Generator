@@ -1,0 +1,18 @@
+schema_version = "1.0.0"
+
+id = "furniture_generator"
+version = "5.4.0"
+name = "Furniture Modular Generator"
+tagline = "Modular furniture: Kitchens, Wardrobes, TV consoles, Dressers"
+maintainer = "Hardway"
+type = "add-on"
+
+blender_version_min = "4.4.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+
+[permissions]
+files = "Save and load custom presets on disk"
