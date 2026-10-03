@@ -741,7 +741,7 @@ def build_carcass(
         record_box(frame_x, 0, ph + h - sink_rib_t, frame_w, stretcher_w, sink_rib_t)
         # The rear bar stops at the same rear plane as the side walls, so a run without a
         # back panel carries the rib to the wall line instead of leaving a panel-thick ledge.
-        record_box(frame_x, y_rear - stretcher_w, ph + h - t, frame_w, stretcher_w, t)
+        record_box(frame_x, y_rear - stretcher_w, ph + h - sink_rib_t, frame_w, stretcher_w, sink_rib_t)
     elif (sec_type != SEC_APPLIANCE) or has_top:
         if is_upper:
             record_box(frame_x, 0, ph + h - t, frame_w, d - t, t)
