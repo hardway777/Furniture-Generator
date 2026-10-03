@@ -734,7 +734,11 @@ def build_carcass(
     if sec_type == SEC_SINK:
         # American/Modern Sink stretcher ribs (front and back bars)
         stretcher_w = 0.070
-        record_box(frame_x, 0, ph + h - t, frame_w, stretcher_w, t)
+        # The front rib is the bar that crosses the sink: it sits right under the cutout,
+        # so a panel-thick bar hangs down into the bowl. In a sink section it stays a
+        # 1 cm strip flush with the countertop underside.
+        sink_rib_t = 0.010
+        record_box(frame_x, 0, ph + h - sink_rib_t, frame_w, stretcher_w, sink_rib_t)
         # The rear bar stops at the same rear plane as the side walls, so a run without a
         # back panel carries the rib to the wall line instead of leaving a panel-thick ledge.
         record_box(frame_x, y_rear - stretcher_w, ph + h - t, frame_w, stretcher_w, t)
