@@ -47,6 +47,7 @@ from .primitives import (
     drawer_collider_boxes,
     merge_mesh_into_object,
     new_object,
+    sink_bowl_collider_boxes,
     solve_sink_cutout,
     stamp_sink_drain,
     SINK_STRAINER_CLEARANCE,
@@ -924,7 +925,8 @@ SINK_RIM_EXTRUDE = 0.01
 def build_sink_bowl(
         name_prefix, hx0, hy0, hw, hd, z_top, depth,
         margin_f, margin_b, margin_l, margin_r,
-        collection, parent, matrix, mat, bevels=None, drain=None
+        collection, parent, matrix, mat, bevels=None, drain=None,
+        gen_collisions=False
 ):
     """Sink bowl object: the 5x5 rim + 3x3 recess primitive dropped into the cutout.
 
@@ -934,8 +936,7 @@ def build_sink_bowl(
     dict with the three per-group widths (floor / vert / top) plus the shared `segments`
     and `miter`; the bevel is applied before the UVs so the new bevel faces are projected
     too. `drain` carries the 2-step stamp parameters (see primitives.stamp_sink_drain) and
-    the drain bevel widths/segments. No collider: a bbox over an open bowl would fill the
-    cavity, and the export-side collision for a sink is a separate decision.
+    the drain bevel widths/segments.
     See AGENT_NOTES.md [NOTE_16560], [NOTE_16565], [NOTE_16575], [NOTE_16580].
     """
     z_bot = z_top - depth
@@ -996,6 +997,13 @@ def build_sink_bowl(
             merge_mesh_into_object(bowl, smesh, smatrix)
             bpy.data.meshes.remove(smesh)
     apply_box_uvs(bowl, mat["u"], mat["v"], mat["rot"])
+    # The bowl mesh is authored in the countertop's own frame and posed with its matrix, so
+    # the collider boxes are given in that same frame with that same matrix.
+    if gen_collisions:
+        for idx, cb in enumerate(sink_bowl_collider_boxes(
+                hx0, hy0, hw, hd, z_top, z_bot,
+                margin_f, margin_b, margin_l, margin_r)):
+            create_ubx_box_primitive(bowl, idx + 1, *cb, collection, matrix)
     return bowl
 
 
@@ -1069,7 +1077,7 @@ def build_countertop(
             margin_f=sink_recess_margin_f, margin_b=sink_recess_margin_b,
             margin_l=sink_recess_margin_l, margin_r=sink_recess_margin_r,
             collection=collection, parent=parent, matrix=matrix, mat=m_counter,
-            bevels=sink_bevels, drain=sink_drain)
+            bevels=sink_bevels, drain=sink_drain, gen_collisions=gen_collisions)
     else:
         verts, faces = [], []
         if sec_type == SEC_CORNER and use_bevel:

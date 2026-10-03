@@ -399,7 +399,9 @@ def build_cabinet_row(props, sections, row_name, depth, height, is_upper, base_z
                             "strainer_on": sink_sec.sink_strainer_on,
                             "strainer_thickness": sink_sec.sink_strainer_thickness,
                             "strainer_gap": sink_sec.sink_strainer_gap,
-                        })
+                        },
+                        gen_collisions=gen_collisions,
+                    )
                 t_island_ms = (time.perf_counter() - t_island_start) * 1000.0
                 log(f"  [{row_name}] Island Countertop: {t_island_ms:.2f} ms")
             else:

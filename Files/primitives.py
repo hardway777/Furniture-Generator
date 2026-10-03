@@ -525,6 +525,70 @@ def create_sink_bowl_mesh(x0, y0, w, d, z_top, z_bot,
     return mesh
 
 
+# The collider plate thickness of the sink bowl: the same 10 mm the rim skirt of the mesh
+# drops inside the cutout (SINK_RIM_EXTRUDE in sections.py), so the collision shell and the
+# visible wall of the sink read as one thickness.
+SINK_COLLIDER_PLATE = 0.010
+
+
+def sink_bowl_collider_boxes(x0, y0, w, d, z_top, z_bot,
+                             margin_f, margin_b, margin_l, margin_r,
+                             plate=SINK_COLLIDER_PLATE):
+    """The nine collider boxes of one sink bowl, in the frame the bowl mesh is authored in.
+
+    A bowl is a hollow cup, so a single bound_box collider over it fills the cavity and the
+    engine sees a solid block nothing can be dropped into. The replacement covers the three
+    surfaces a player actually touches, in the order they are emitted:
+
+      1-4  rim    - the flat flange between the footprint and the recess rect, cut into four
+                    strips. Its top face is the countertop top, so a cup slid across the
+                    counter crosses the sink without catching on a lip.
+      5-8  walls  - one plate per inner wall, standing on the recess rect from the floor to
+                    the rim. Each plate is laid OUTSIDE the cavity, so its inner face is
+                    exactly the visible wall and the usable air box of the bowl is unchanged.
+      9    floor  - a plate whose top face is the bowl floor, so items come to rest on the
+                    sink bottom instead of falling through it into the carcass.
+
+    Every box is read off `sink_bowl_grid`, the same grid the mesh is built from, so the
+    clamped recess margins are shared with the mesh rather than recomputed here. A side whose
+    margin clamps away gets no box at all - there is no wall there to collide with, and a
+    zero-size piece would still be exported as a degenerate collision body.
+    """
+    _xs, _ys, (bx0, bx1, by0, by1), _sq = sink_bowl_grid(
+        x0, y0, w, d, margin_f, margin_b, margin_l, margin_r)
+    depth = max(0.0, z_top - z_bot)
+    # The four recess margins, re-read from the clamped grid: each one is the thickness of
+    # the ring the rim strips are cut from, and the most the matching wall plate can take
+    # without sticking past the footprint into the countertop.
+    m_l, m_r = bx0 - x0, (x0 + w) - bx1
+    m_f, m_b = by0 - y0, (y0 + d) - by1
+    cav_w, cav_d = bx1 - bx0, by1 - by0
+
+    boxes = []
+
+    def push(bx, by, bz, sx, sy, sz):
+        if sx > 1e-6 and sy > 1e-6 and sz > 1e-6:
+            boxes.append((bx, by, bz, sx, sy, sz))
+
+    plate = min(plate, depth)
+    # 1-4 Rim.
+    z_rim = z_top - plate
+    push(x0, y0, z_rim, w, m_f, plate)
+    push(x0, by1, z_rim, w, m_b, plate)
+    push(x0, by0, z_rim, m_l, cav_d, plate)
+    push(bx1, by0, z_rim, m_r, cav_d, plate)
+    # 5-8 Inner walls.
+    t_f, t_b = min(plate, m_f), min(plate, m_b)
+    t_l, t_r = min(plate, m_l), min(plate, m_r)
+    push(bx0, by0 - t_f, z_bot, cav_w, t_f, depth)
+    push(bx0, by1, z_bot, cav_w, t_b, depth)
+    push(bx0 - t_l, by0, z_bot, t_l, cav_d, depth)
+    push(bx1, by0, z_bot, t_r, cav_d, depth)
+    # 9 Floor.
+    push(bx0, by0, z_bot - plate, cav_w, cav_d, plate)
+    return boxes
+
+
 SINK_BEVEL_GROUPS = ("floor", "vert", "top")
 
 
