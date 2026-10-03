@@ -932,13 +932,19 @@ def create_handle_mesh(name, radius, bar_len, mount_r, mount_len, mount_span, ve
 
     Replaces the old create-3-objects + bpy.ops.object.join + transform_apply path:
     identical geometry, no selection/active-object dependency and no temp objects.
+
+    The bar axis is the object origin and the mounts run from it along +Y, so their outer
+    end lands exactly at y=mount_len. Every caller puts that end on the front face by
+    offsetting the object by the full mount_len, which makes "Mount Length" the real
+    distance from the front face to the bar axis. It used to end at mount_len - radius*0.25,
+    so half of every handle sank into the panel it was mounted on.
     """
     bm = bmesh.new()
     bar_matrix = Matrix.Identity(4) if vertical else Matrix.Rotation(radians(90), 4, 'Y')
     bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=False, segments=12,
                           radius1=radius, radius2=radius, depth=bar_len, matrix=bar_matrix)
 
-    y = mount_len / 2 - radius * 0.25
+    y = mount_len / 2
     for sign in (-1.0, 1.0):
         if vertical:
             offset = Vector((0.0, y, sign * mount_span / 2.0))

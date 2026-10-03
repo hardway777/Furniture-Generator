@@ -205,7 +205,9 @@ def build_wardrobe_section(
                     tile_u=m_handle["u"], tile_v=m_handle["v"], rot_uv=m_handle["rot"], collection=collection
                 )
                 h_obj.parent = drawer_obj
-                h_obj.location = (col_front_w / 2, -t - handle_drawer["mount_len"] / 2, dr_h / 2)
+                # The drawer front plate runs from y=-t to y=0, so its face sits at y=-t and
+                # the full mount_len is what keeps the standoff on that face instead of inside it.
+                h_obj.location = (col_front_w / 2, -t - handle_drawer["mount_len"], dr_h / 2)
 
             elif zt == 'DOOR':
                 door_h = facade_h
@@ -259,7 +261,7 @@ def build_wardrobe_section(
                         tile_u=m_handle["u"], tile_v=m_handle["v"], rot_uv=m_handle["rot"], collection=collection
                     )
                     h_obj.parent = d_obj
-                    h_obj.location = (hx, -handle_door["mount_len"] / 2, final_h_z)
+                    h_obj.location = (hx, -handle_door["mount_len"], final_h_z)
 
                 if zone.door_swing == 'PAIR':
                     dw = (col_front_w - gap) / 2.0
@@ -531,7 +533,7 @@ def build_corner_upper_section(
         )
         handle.parent = door
         sm = handle_door["side_margin"]
-        handle.location = (diag_w - sm, -handle_door["mount_len"] / 2, corner_hz)
+        handle.location = (diag_w - sm, -handle_door["mount_len"], corner_hz)
 
     elif corner_style == CORN_DOORS:
         dw1 = x_front - t - gap * 2
@@ -556,7 +558,7 @@ def build_corner_upper_section(
         )
         h1.parent = d1
         sm = handle_door["side_margin"]
-        h1.location = (dw1 - sm, -handle_door["mount_len"] / 2, corner_hz)
+        h1.location = (dw1 - sm, -handle_door["mount_len"], corner_hz)
 
         dw2 = (y_front - (-t - gap)) - t - gap * 2
         hinge2_pos = Vector((x_front - t, -t - gap + gap, door_z))
@@ -569,7 +571,7 @@ def build_corner_upper_section(
 
         # Door 2 is mirrored relative to door 1: y_offset=-t/2 runs the panel from y=-t to y=0,
         # so its visible face is local y=0 = max_y, not min_y. The +90 deg hinge turns that face
-        # onto the second wall, and the handle confirms the side (positive mount_len/2 plus a
+        # onto the second wall, and the handle confirms the side (positive mount_len plus a
         # 180 deg rotation, unique in this file). Marking it as a regular 'front' facade bevels
         # the inner side of the door instead of the front.
         d2_mesh = create_panel_mesh(door2_name, dw2, door_h, t,
@@ -586,7 +588,7 @@ def build_corner_upper_section(
         )
         h2.parent = d2
         h2.rotation_euler = (0, 0, radians(180))
-        h2.location = (dw2 - sm, handle_door["mount_len"] / 2, corner_hz)
+        h2.location = (dw2 - sm, handle_door["mount_len"], corner_hz)
 
     return
 
@@ -851,7 +853,7 @@ def build_section_facades(
             handle.parent = door
             sm = handle_door["side_margin"]
             hx = (dw - sm) if side == "L" else (-dw + sm)
-            handle.location = (hx, -handle_door["mount_len"] / 2, hz)
+            handle.location = (hx, -handle_door["mount_len"], hz)
 
         if doors == 1:
             make_door("L", width - gap * 2, 1)
@@ -914,7 +916,7 @@ def build_section_facades(
                 tile_u=m_handle["u"], tile_v=m_handle["v"], rot_uv=m_handle["rot"], collection=collection
             )
             handle.parent = drawer
-            handle.location = (front_w / 2, -t - handle_drawer["mount_len"] / 2, drawer_h / 2)
+            handle.location = (front_w / 2, -t - handle_drawer["mount_len"], drawer_h / 2)
 
 
 # Sink presentation: the bowl is its own part, so it takes the chrome material instead of
