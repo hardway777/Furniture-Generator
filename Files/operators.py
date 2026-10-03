@@ -207,6 +207,7 @@ class KITCHEN_OT_CopyLowerToUpper(Operator):
             dst.custom_depth = src.custom_depth
             dst.has_bottom = src.has_bottom
             dst.has_top = src.has_top
+            dst.has_back_panel = src.has_back_panel
             dst.shelf_rows = src.shelf_rows
             dst.no_side_walls = src.no_side_walls
             dst.shelves_span_walls = src.shelves_span_walls
@@ -334,7 +335,12 @@ def run_generation(props, scene, gen_collisions=True):
     t_upper_ms = 0.0
     if props.gen_upper:
         t_upper_start = time.perf_counter()
-        base_z_upper = props.plinth_height + props.height + props.countertop_thickness + props.backsplash_height
+        # The upper row hangs off the top line of the lower bodies, and those stand on
+        # whichever support is switched on: legs lift them to leg_height, a plinth to
+        # plinth_height. Reading plinth_height alone drops the whole wall row by the
+        # difference the moment a legged kitchen gets upper cabinets.
+        lower_support_z = props.leg_height if props.use_legs else props.plinth_height
+        base_z_upper = lower_support_z + props.height + props.countertop_thickness + props.backsplash_height
         sections_upper = list(props.upper_sections) if not props.sync_upper_with_lower else []
 
         if props.sync_upper_with_lower:

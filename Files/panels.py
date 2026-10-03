@@ -394,6 +394,10 @@ class KITCHEN_PT_LowerSections(Panel):
             elif st == SEC_SINK:
                 col_ui = box.column(align=True)
                 col_ui.prop(sec, "doors")
+                # The carcass honours has_back_panel for every section type, so the sink
+                # module gets the same switch a Normal section shows - a sink run often
+                # carries a boiler niche or siphon access that has to stay open behind.
+                col_ui.prop(sec, "has_back_panel")
                 row_dim = col_ui.row(align=True)
                 row_dim.prop(sec, "sink_w")
                 row_dim.prop(sec, "sink_d")

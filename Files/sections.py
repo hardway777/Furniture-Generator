@@ -77,14 +77,23 @@ def drawer_box_inset(front_x, front_w, interior_x0, interior_x1):
 def build_wardrobe_section(
         name_prefix, width, plinth_recess, shelf_t,
         gap, handle_door, handle_drawer,
-        has_plinth, columns_data, gen_collisions, use_bevel,
+        has_plinth, use_legs, leg_height, columns_data, gen_collisions, use_bevel,
         bevel_w, bevel_segs, collection, parent,
         matrix, h, ph, t,
         d, m_carcass, m_plinth, m_facade,
         m_handle
 ):
     """Tall wardrobe column section: carcass, per-column zones, doors and drawers."""
-    if has_plinth and ph > 0:
+    # The wardrobe returns from generate_section before the shared support pass, so it has
+    # to make the same legs/plinth choice itself. Reading has_plinth alone was enough while
+    # legs were on: row.py drops the plinth flag then, so a legged wardrobe got neither.
+    if use_legs and leg_height > 0.0:
+        build_legs(
+            name_prefix=name_prefix, width=width, d=d, leg_h=leg_height,
+            gen_collisions=gen_collisions, collection=collection, parent=parent,
+            matrix=matrix, m_plinth=m_plinth
+        )
+    elif has_plinth and ph > 0:
         rec = plinth_recess
         verts, faces = [], []
         add_box(verts, faces, 0, rec, 0, width, d - rec, ph)
@@ -725,7 +734,9 @@ def build_carcass(
         # American/Modern Sink stretcher ribs (front and back bars)
         stretcher_w = 0.070
         record_box(frame_x, 0, ph + h - t, frame_w, stretcher_w, t)
-        record_box(frame_x, d - t - stretcher_w, ph + h - t, frame_w, stretcher_w, t)
+        # The rear bar stops at the same rear plane as the side walls, so a run without a
+        # back panel carries the rib to the wall line instead of leaving a panel-thick ledge.
+        record_box(frame_x, y_rear - stretcher_w, ph + h - t, frame_w, stretcher_w, t)
     elif (sec_type != SEC_APPLIANCE) or has_top:
         if is_upper:
             record_box(frame_x, 0, ph + h - t, frame_w, d - t, t)
@@ -1209,6 +1220,7 @@ def generate_section(
             name_prefix=name_prefix, width=width, plinth_recess=plinth_recess,
             shelf_t=shelf_t, gap=gap,
             handle_door=handle_door, handle_drawer=handle_drawer, has_plinth=has_plinth,
+            use_legs=use_legs, leg_height=leg_height,
             columns_data=columns_data, gen_collisions=gen_collisions, use_bevel=use_bevel,
             bevel_w=bevel_w, bevel_segs=bevel_segs, collection=collection,
             parent=parent, matrix=matrix, h=h,
