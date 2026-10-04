@@ -34,6 +34,12 @@ Outputs (naming per the Epic FBX Static Mesh Pipeline rules):
 Identical doors/drawers (same local geometry incl. handle, same materials)
 are baked once; a hash of the geometry is stored on the object (bake_hash)
 and the report file lists which sockets each unique mesh serves.
+
+Alongside the report, two engine-facing tables are written (see export_tables):
+
+  <bake>_doors.csv    one row per door: socket, mesh, panel size, socket
+                      transform - a UE DataTable straight from the file
+  <bake>_drawers.txt  how far each drawer can travel out of its carcass
 """
 import bpy
 import bmesh

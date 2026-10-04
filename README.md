@@ -56,6 +56,7 @@ Files/                          # Main add-on package
 ├── solver.py                   # Parameter solver for cabinet sizing
 ├── debug_scenes.py             # Debug presets and scenario loader
 ├── bake.py                     # UE export / bake pipeline
+├── export_tables.py            # Doors CSV / drawers TXT engine tables
 ├── blender_manifest.toml       # Add-on manifest and version
 ├── gpl-3.0.txt                 # License file
 └── textures/                   # User PBR texture sets
@@ -101,6 +102,9 @@ The output includes:
 - UBX collision meshes for physics workflows
 - Empty socket objects for export references
 - A generated report file describing the bake results
+- `<bake>_doors.csv` with every door, the socket it hangs on, its panel size
+  and socket transform — import it directly as a UE DataTable
+- `<bake>_drawers.txt` listing the maximum travel of each drawer
 
 ## PBR Materials
 
