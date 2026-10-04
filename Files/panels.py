@@ -181,6 +181,11 @@ class KITCHEN_PT_BakePanel(Panel):
         col.prop(props, "bake_name")
         col.prop(props, "bake_split_upper")
         col.operator("kitchen.bake_export", icon='EXPORT', text=STR["ui_bake_btn"])
+        # Directly under Bake: both finish the same BAKE collection, they only
+        # differ in what leaves the machine. The icon is EXPORT rather than the
+        # spec's `opengl_trace` - that name is not among the 1033 icons the
+        # UILayout enum offers.
+        col.operator("kitchen.export_fbx", icon='EXPORT', text=STR["ui_export_fbx_btn"])
 
 
 class KITCHEN_PT_GeneralPanel(Panel):
