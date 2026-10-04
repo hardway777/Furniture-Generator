@@ -115,6 +115,21 @@ The output includes:
   litres, and — for a drawer only — its travel depth. Clear repeats Ext: these
   boxes are what the engine turns into its "item inside" collider
 
+### Export FBX & Tables
+
+The `Export FBX & Tables` button sits directly under `Bake for Export`. It
+runs the same bake, then writes `<name>.fbx` into the folder you pick with
+the three tables beside it — so a model and the tables describing it leave
+the machine as one unit instead of two.
+
+The FBX is written from the `BAKE_` collection with its `SOCKET_` empties in
+it, which is how every hinge and drawer placement reaches the engine. Note
+that Blender's exporter has no `use_sockets` switch: an empty is an object
+type, so the `EMPTY` type is what has to stay in the export. `verify_fbx.py`
+reads every `SOCKET_` name back out of the finished file rather than trusting
+the call to have worked — a file that opens and looks right while every door
+hangs on a pivot the engine never received would be worse than no file at all.
+
 ## PBR Materials
 
 To add custom PBR materials:
@@ -134,6 +149,7 @@ Run validation checks from the project root:
 
 ```bash
 blender --background --python-exit-code 1 --python verify_shelves.py
+blender --background --python-exit-code 1 --python verify_fbx.py
 cmd /c build_zip.cmd
 ```
 
