@@ -44,6 +44,7 @@ from bpy.types import Operator
 from mathutils import Vector, Matrix
 
 from .core import COLLIDER_COLL_SUFFIX, warn
+from .export_tables import door_entry, drawer_entry, write_tables
 from .mesh_ops import apply_collider_flags, collider_collection, ensure_material
 from .strings import STR
 
@@ -500,6 +501,8 @@ def bake_kitchen(props, scene):
     # ---- moving parts ----------------------------------------------------
     doors = []
     drawers = []
+    door_rows = []
+    drawer_rows = []
     sig_map = {}
     root_to_record = {}
     socket_counters = {body_name: 0}
@@ -549,6 +552,15 @@ def bake_kitchen(props, scene):
         record["sources"].append(root.name)
         root_to_record[root] = record
 
+        # Engine tables collect one row per SOURCE part, not per unique mesh:
+        # every socket needs its own placement even when several sockets share
+        # one mesh. sock.matrix_world is already rebased into the owner body.
+        if "Drawer" in root.name:
+            drawer_rows.append(drawer_entry(root, sock_name, record["name"], owner))
+        else:
+            door_rows.append(door_entry(root, sock_name, record["name"], owner,
+                                        sock.matrix_world))
+
     # ---- colliders --------------------------------------------------------
     ubx_prefix = f"UBX_SM_{kid}_"
     by_name = {o.name: o for o in bpy.data.objects}
@@ -596,8 +608,18 @@ def bake_kitchen(props, scene):
     # ---- report -----------------------------------------------------------
     text = _report_text(bake, coll.name, body_info, upper_info, doors, drawers, ubx_counts)
     report_path = None
+    doors_csv_path = None
+    drawers_txt_path = None
     blend = bpy.data.filepath
     if blend:
+        # The engine tables live next to the report, so one bake drops every
+        # text output of this name in one place.
+        doors_csv_path, drawers_txt_path = write_tables(
+            os.path.dirname(blend), bake, door_rows, drawer_rows)
+        if doors_csv_path:
+            text += f"\nДвери (CSV): {os.path.basename(doors_csv_path)}\n"
+        if drawers_txt_path:
+            text += f"Ящики (TXT): {os.path.basename(drawers_txt_path)}\n"
         report_path = os.path.join(os.path.dirname(blend), f"{bake}_bake_report.txt")
         try:
             with open(report_path, "w", encoding="utf-8") as fh:
@@ -613,6 +635,8 @@ def bake_kitchen(props, scene):
         "upper_body": upper_info,
         "doors": doors,
         "drawers": drawers,
+        "doors_csv": doors_csv_path,
+        "drawers_txt": drawers_txt_path,
         "ubx_counts": ubx_counts,
         "report_path": report_path,
     }
