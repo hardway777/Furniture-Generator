@@ -6,7 +6,7 @@ from bpy.props import PointerProperty
 from . import strings, core, mesh_ops, primitives, solver, sections, row, properties, operators, debug_scenes, panels, bake
 from .bake import KITCHEN_OT_Bake
 from .debug_scenes import KITCHEN_OT_DebugScene
-from .operators import KITCHEN_OT_CopyCol1ToAll, KITCHEN_OT_CopyLowerToUpper, KITCHEN_OT_DeletePreset, KITCHEN_OT_Generate, KITCHEN_OT_LoadPreset, KITCHEN_OT_SavePreset, KITCHEN_OT_SetSectionsExpanded, unregister_live_timer
+from .operators import KITCHEN_OT_CopyCol1ToAll, KITCHEN_OT_CopyLowerToUpper, KITCHEN_OT_DeletePreset, KITCHEN_OT_ExportFbx, KITCHEN_OT_Generate, KITCHEN_OT_LoadPreset, KITCHEN_OT_SavePreset, KITCHEN_OT_SetSectionsExpanded, unregister_live_timer
 from .panels import KITCHEN_PT_BakePanel, KITCHEN_PT_BevelPanel, KITCHEN_PT_Countertop, KITCHEN_PT_DebugPanel, KITCHEN_PT_GeneralPanel, KITCHEN_PT_Handles, KITCHEN_PT_LowerGlobal, KITCHEN_PT_LowerSections, KITCHEN_PT_MainPanel, KITCHEN_PT_Materials, KITCHEN_PT_UpperGlobal, KITCHEN_PT_UpperSections
 from .properties import CabinetColumn, CabinetZone, KitchenGeneratorProps, KitchenSection, ShelfBay, ShelfTier, unregister_grid_fix_timer, update_section_columns
 
@@ -27,6 +27,7 @@ classes = (
     KITCHEN_OT_CopyLowerToUpper,
     KITCHEN_OT_Generate,
     KITCHEN_OT_Bake,
+    KITCHEN_OT_ExportFbx,
     KITCHEN_OT_DebugScene,
     KITCHEN_PT_MainPanel,
     KITCHEN_PT_BevelPanel,

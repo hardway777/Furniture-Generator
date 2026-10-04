@@ -35,6 +35,8 @@ from .properties import (
 )
 from .mesh_ops import sync_bbox_colliders
 from .row import build_cabinet_row
+from .bake import bake_kitchen
+from .export_tables import write_tables
 from .strings import STR
 
 # [ANCHOR: OPERATORS]
@@ -407,6 +409,144 @@ def run_generation(props, scene, gen_collisions=True):
             print(f"     - {message}")
 
     return t_total_ms
+
+
+# [ANCHOR: EXPORT_FBX]
+# ============================================================
+class KITCHEN_OT_ExportFbx(Operator):
+    """Bake, export the BAKE collection to FBX, and write the tables beside it."""
+
+    bl_idname = "kitchen.export_fbx"
+    bl_label = STR["op_export_fbx_label"]
+    bl_description = STR["op_export_fbx_desc"]
+    bl_options = {'REGISTER'}
+
+    filepath: StringProperty(
+        name="File Path",
+        description="Where the FBX and its tables are written",
+        subtype='FILE_PATH',
+    )
+    filter_glob: StringProperty(default="*.fbx", options={'HIDDEN'})
+    filter_folder: BoolProperty(default=True, options={'HIDDEN'})
+
+    @classmethod
+    def poll(cls, context):
+        return getattr(context.scene, "kitchen_props", None) is not None
+
+    def invoke(self, context, event):
+        # A filepath operator with no invoke would fire straight from the
+        # panel button with an empty path and cancel: the browser is what
+        # gives filter_folder and filter_glob anything to filter.
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context):
+        props = context.scene.kitchen_props
+        fbx_path = bpy.path.abspath(self.filepath) if self.filepath else ""
+        if not fbx_path:
+            warn("export_fbx: no file path given")
+            self.report({'ERROR'}, STR["op_export_fbx_no_path"])
+            return {'CANCELLED'}
+
+        # Same starting point as Bake: this exports the CURRENT generation.
+        # Regenerating would purge a model the user may have just tuned, and
+        # Bake does not do it either - "similar to the existing Bake operator"
+        # is taken literally here on purpose.
+        report = bake_kitchen(props, context.scene)
+        if report is None:
+            warn("export_fbx: nothing to bake")
+            self.report({'WARNING'}, STR["op_export_fbx_no_source"])
+            return {'CANCELLED'}
+
+        coll = bpy.data.collections.get(report["collection"])
+        members = list(coll.all_objects) if coll is not None else []
+        if not members:
+            warn(f"export_fbx: nothing in '{report['collection']}' to export")
+            self.report({'ERROR'}, STR["op_export_fbx_no_collection"])
+            return {'CANCELLED'}
+
+        out_dir = os.path.dirname(fbx_path)
+        try:
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
+        except OSError as exc:
+            warn(f"export_fbx: cannot create '{out_dir}': {exc}")
+            self.report({'ERROR'}, STR["op_export_fbx_failed"])
+            return {'CANCELLED'}
+
+        # Any failure here means "no file", never "a file without its sockets":
+        # the exporter raises RuntimeError on its own errors, and a keyword it
+        # does not know surfaces as TypeError.
+        try:
+            if not self._select(members, context):
+                self.report({'ERROR'}, STR["op_export_fbx_failed"])
+                return {'CANCELLED'}
+            self._write_fbx(fbx_path)
+        except Exception as exc:
+            warn(f"export_fbx: FBX export failed: {exc}")
+            self.report({'ERROR'}, STR["op_export_fbx_failed"])
+            return {'CANCELLED'}
+        finally:
+            # Runs on the failure paths too: an export is no reason to strand
+            # a hundred-object selection in the viewport.
+            for obj in context.view_layer.objects:
+                obj.select_set(False)
+
+        written = write_tables(
+            out_dir, report["bake"],
+            report["door_rows"], report["drawer_rows"], report["shelf_rows"])
+        if any(path is None for path in written):
+            warn(f"export_fbx: FBX saved but a table was not: {written}")
+            self.report({'WARNING'}, STR["op_export_fbx_tables_missing"])
+        self.report({'INFO'}, STR["op_export_fbx_done"])
+        return {'FINISHED'}
+
+    @staticmethod
+    def _select(members, context):
+        """Select exactly the BAKE collection, or refuse.
+
+        A socket left out of the selection is not cosmetic: the file still
+        opens and still looks right while every door hangs on a pivot the
+        engine never received. So the COUNT is checked, not merely attempted.
+        """
+        for obj in context.view_layer.objects:
+            obj.select_set(False)
+        selected = 0
+        for obj in members:
+            try:
+                obj.select_set(True)
+                selected += 1
+            except RuntimeError as exc:
+                warn(f"export_fbx: cannot select '{obj.name}': {exc}")
+        if selected != len(members):
+            warn(f"export_fbx: selected {selected} of {len(members)} objects")
+            return False
+        return True
+
+    @staticmethod
+    def _write_fbx(fbx_path):
+        """Export the current selection, keeping sockets and scene units.
+
+        Sockets are EMPTY objects linked into the BAKE collection, so
+        `object_types` must contain EMPTY - drop it and the furniture ships
+        with every hinge and drawer placement gone. The task spec asked for a
+        `use_sockets` keyword instead; Blender 5.2's exporter has no such
+        property and raises `TypeError: keyword "use_sockets" unrecognized`,
+        so the requirement is met through the object types and pinned by
+        verify_fbx.py, which reads every SOCKET_ name back out of the bytes.
+
+        `apply_unit_scale` with `global_scale=1.0` keeps the file on the
+        scene's own units - METRIC at whatever scale_length the user set -
+        rather than on a hardcoded one.
+        """
+        return bpy.ops.export_scene.fbx(
+            filepath=fbx_path,
+            use_selection=True,
+            path_mode='COPY',
+            apply_unit_scale=True,
+            global_scale=1.0,
+            object_types={'EMPTY', 'MESH'},
+        )
 
 
 # [ANCHOR: LIVE_PREVIEW]

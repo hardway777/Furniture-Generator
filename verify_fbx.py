@@ -34,6 +34,7 @@ Covered here:
 """
 import csv
 import os
+import shutil
 import sys
 
 import bpy
@@ -115,8 +116,10 @@ def check_export(key):
     # --- baseline: Bake on its own, before anything new runs -----------------
     assert bpy.ops.kitchen.bake_export() == {'FINISHED'}, "bake before export"
     blend_doors = os.path.join(blend_dir, props.bake_name + "_doors.csv")
+    # The file, not a row count: bedside_dresser has no doors at all and only
+    # its drawer sockets, so zero rows is the correct answer there.
+    assert os.path.isfile(blend_doors), "Bake wrote no doors CSV"
     baseline = parse_csv(blend_doors)
-    assert baseline, "bake produced no door rows"
 
     coll = bpy.data.collections.get("BAKE_" + props.bake_name)
     assert coll is not None, "no BAKE collection for " + props.bake_name
@@ -181,11 +184,18 @@ def check_export(key):
              len(meshes) - len(lost_meshes), len(meshes), len(fbx_doors)))
     print("  tables:", sorted(os.listdir(fbx_dir)))
     print("  PASS")
+    return len(baseline)
 
 
+# A stale output directory would let the "starts empty" check pass once and
+# fail on every later run, so the whole tree goes before anything else.
+shutil.rmtree(OUT, ignore_errors=True)
 os.makedirs(OUT, exist_ok=True)
 print("Blender", bpy.app.version_string)
 check_exporter_surface()
+door_rows_seen = 0
 for scene_key in SCENES:
-    check_export(scene_key)
+    door_rows_seen += check_export(scene_key)
+# The doors comparison is only meaningful if some scene actually has a door.
+assert door_rows_seen > 0, "no scene in the run exported a single door row"
 print("\nALL FBX EXPORT TESTS PASSED")

@@ -674,6 +674,13 @@ def bake_kitchen(props, scene):
         "doors_csv": doors_csv_path,
         "drawers_txt": drawers_txt_path,
         "shelves_csv": shelves_csv_path,
+        # The raw rows, not only the paths they were written to. The FBX
+        # operator writes the very same tables next to the FBX, in a directory
+        # this bake never touches, and re-deriving them would mean a second bake
+        # with a second chance to disagree with the numbers already on disk.
+        "door_rows": door_rows,
+        "drawer_rows": drawer_rows,
+        "shelf_rows": shelf_rows,
         "ubx_counts": ubx_counts,
         "report_path": report_path,
     }
