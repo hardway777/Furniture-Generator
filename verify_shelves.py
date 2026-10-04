@@ -3,7 +3,11 @@
 
 Run from a Blender binary:
 
-  blender.exe --background --python verify_shelves.py
+  blender.exe --background --python-exit-code 1 --python verify_shelves.py
+
+`--python-exit-code 1` is not decoration: without it Blender prints the
+traceback of a failed assertion and still exits 0, so a red run reads green
+to anything that only checks the exit status.
 
 The table lists storage SLOTS, not shelves: one invisible box per functional
 compartment - the whole niche behind its doors, one single drawer, the surface
@@ -315,6 +319,41 @@ def check_unresolved_opening():
     print("  PASS")
 
 
+def check_island_surface():
+    """The one slab an island run shares gets exactly one surface slot.
+
+    Island sections skip their own slab, so a per-section counter row here
+    would mean that skip stopped working, and no counter row at all would mean
+    the monolithic slab found no carcass to attach to - `host is None` only
+    warns, and a warning alone would leave this test green.
+    """
+    print("\n=== island surface ===", flush=True)
+    clear_scene()
+    props = bpy.context.scene.kitchen_props
+    build("island_rounded", props)
+    # The span is the whole run, so its slot belongs to the FIRST section: that
+    # is the section whose matrix the slab - and therefore its box - is in.
+    islands = [s for s in props.sections if getattr(s, "is_island", False)]
+    assert islands, "preset is no longer an island"
+    assert props.sections[0].is_island, "first section is not part of the span"
+
+    assert bpy.ops.kitchen.bake_export() == {'FINISHED'}, "bake island"
+    rows = parse_csv(os.path.join(OUT, props.bake_name + "_shelves.csv"))
+    counters = [r for r in rows if r["Type"] == "counter"]
+    print("  slots:", len(rows), "counters:", len(counters))
+    assert len(counters) == 1, \
+        "expected exactly the one monolithic slab, got %d counter rows" % len(counters)
+    c = counters[0]
+    assert c["Section"] == "Base_01", \
+        "island slab slot landed on %s instead of the span's first section" % c["Section"]
+    assert abs(float(c["ExtZ"]) - COUNTERTOP_SLOT_H) < 1e-3, "not a surface band"
+    assert c["Depth"] == "" and not c["DoorSocket"], "a surface opens nothing"
+    # The slab sits on top of every section of the run, never inside one.
+    niche_z = max(float(r["LocZ"]) for r in rows if r["Type"] in ("closed", "open"))
+    assert float(c["LocZ"]) > niche_z, "surface slot is below the cabinets it covers"
+    print("  PASS")
+
+
 def check_no_slots():
     """No storage at all is still a file: a header and nothing under it.
 
@@ -359,5 +398,6 @@ for scene_key in SCENES:
 check_one_box_per_compartment()
 check_rod_zone()
 check_unresolved_opening()
+check_island_surface()
 check_no_slots()
 print("\nALL SLOT TABLE TESTS PASSED")

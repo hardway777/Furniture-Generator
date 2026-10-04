@@ -3,6 +3,8 @@
 Moved verbatim from the single-module addon; no body was edited during the move.
 """
 import time
+
+import bpy
 from mathutils import Vector, Matrix
 from math import radians, cos, sin, atan2
 from .core import (
