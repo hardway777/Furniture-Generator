@@ -133,7 +133,7 @@ To add custom PBR materials:
 Run validation checks from the project root:
 
 ```bash
-blender --background --python verify_shelves.py
+blender --background --python-exit-code 1 --python verify_shelves.py
 cmd /c build_zip.cmd
 ```
 

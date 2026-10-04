@@ -122,7 +122,7 @@ README.md                       # Английская версия README
 Запускайте проверки из корня проекта:
 
 ```bash
-blender --background --python verify_shelves.py
+blender --background --python-exit-code 1 --python verify_shelves.py
 cmd /c build_zip.cmd
 ```
 
