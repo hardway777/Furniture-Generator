@@ -1,13 +1,18 @@
 """export_tables - Engine-facing tables for the moving parts of a bake.
 
-Two files are written next to the bake report, both keyed by the bake name:
+Three files are written next to the bake report, all keyed by the bake name:
 
   <bake>_doors.csv    one row per door instance: the socket it hangs on, the
                       unique mesh that socket serves, the panel dimensions and
                       the socket transform rebased into its body - ready for a
                       UE DataTable import (RowName = the socket name, unique
                       per row);
-  <bake>_drawers.txt  a readable list of how far every drawer can travel.
+  <bake>_drawers.txt  a readable list of how far every drawer can travel;
+  <bake>_shelves.csv  one row per storage SLOT: one invisible box per
+                      functional compartment - the whole niche behind its
+                      doors, one single drawer, the surface of a countertop,
+                      the air under a hanging rod, an entire open rack - where
+                      it is, how big it is, and which opening reaches it.
 
 CSV numbers are metres with a dot decimal separator, the format the UE
 DataTable importer expects. Dimensions are read off the source facade mesh in
@@ -17,7 +22,20 @@ table describes the part exactly as the engine receives it.
 Drawer travel is a geometric limit, not a slide catalogue: the box travels
 forward until its rear wall reaches the front plane of the carcass. The drawer
 mesh spans y = -t (facade face) .. box_depth, so the local max-y of the mesh
-IS the travel; the same value the colliders were laid out from.
+IS the travel; the same value the colliders were laid out from, and the Depth
+column of a drawer row copies it verbatim so the two files cannot disagree.
+
+The shelves table is the one table that is NOT measured off a mesh: a carcass
+bakes into a single static mesh whose bounds are the whole body, so the boxes
+come from the plan the generator left on the carcass object
+(core.SHELF_PLAN_KEY), captured where the compartment was laid out.
+
+A slot is a SLOT, not a shelf. Shelves, middle posts and bay dividers inside a
+compartment are obstacles an item collides with; they never cut the box in
+two, because the engine's "is the item inside" test is built from these boxes
+and one compartment is one test. What does cut a box is a different OPENING: a
+drawer gets its own row ("the keys are in the second drawer"), a niche with two
+doors gets one, and a rack of fifty boards gets one.
 """
 import csv
 import os
@@ -84,6 +102,18 @@ _CSV_HEADER = ("RowName", "Source", "Body", "Socket", "Mesh", "Hinge",
                "Width", "Height", "Thickness",
                "SocketX", "SocketY", "SocketZ", "SocketYawDeg")
 
+# Storage slots. Ext* is the whole compartment box; Clear* repeats it, because
+# the engine builds its containment collider from these boxes and "which shelf
+# inside is the item on" is not a question it asks. MaxVolume is that box in
+# litres, MaxItems a coarse reference (1 for a rod, 0 everywhere else). Depth
+# is filled only for Type=drawer, where it is the travel the drawer TXT reports.
+# Type: closed | open | rod | counter | drawer
+_SHELVES_HEADER = ("RowName", "Section", "Body", "Type", "DoorSocket",
+                   "LocX", "LocY", "LocZ",
+                   "ExtX", "ExtY", "ExtZ",
+                   "ClearX", "ClearY", "ClearZ",
+                   "MaxVolume", "MaxItems", "Depth")
+
 
 def _write_doors_csv(path, entries):
     with open(path, "w", encoding="utf-8", newline="") as fh:
@@ -96,6 +126,56 @@ def _write_doors_csv(path, entries):
                 f"{d['width']:.4f}", f"{d['height']:.4f}", f"{d['thickness']:.4f}",
                 f"{d['x']:.4f}", f"{d['y']:.4f}", f"{d['z']:.4f}",
                 f"{d['yaw']:.2f}",
+            ])
+
+
+def shelf_entry(row_name, section, body, slot_type, door_socket,
+                loc, ext, clear, max_items, depth=None):
+    """One CSV record for a storage slot, placed in its body's frame.
+
+    `loc` is the centre of the box, `ext`/`clear` the full sizes; all are
+    already rebased into the body pivot by the bake, the same convention the
+    doors table uses, so both tables can be joined on Body and share one space.
+
+    `door_socket` is copied verbatim from the Socket column of the doors CSV for
+    a closed/open slot, and from the drawer's own socket for Type=drawer - an
+    engine join key, not a derived name, which is why an unresolved one drops
+    the row instead of exporting a guess. None means nothing opens this slot
+    (an open niche, a countertop, a rack with no door).
+
+    `depth` is None except for Type=drawer, where it is the travel extent in
+    metres - the same number `_drawers.txt` prints for that drawer.
+    """
+    volume = ext[0] * ext[1] * ext[2] * 1000.0
+    return {
+        "row_name": row_name,
+        "section": section,
+        "body": body,
+        "type": slot_type,
+        "door_socket": door_socket,
+        "loc": loc,
+        "ext": ext,
+        "clear": clear,
+        "volume": volume,
+        "max_items": max_items,
+        "depth": depth,
+    }
+
+
+def _write_shelves_csv(path, entries):
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(_SHELVES_HEADER)
+        for s in entries:
+            loc, ext, clear = s["loc"], s["ext"], s["clear"]
+            writer.writerow([
+                s["row_name"], s["section"], s["body"], s["type"],
+                s["door_socket"] if s["door_socket"] else "",
+                f"{loc[0]:.4f}", f"{loc[1]:.4f}", f"{loc[2]:.4f}",
+                f"{ext[0]:.4f}", f"{ext[1]:.4f}", f"{ext[2]:.4f}",
+                f"{clear[0]:.4f}", f"{clear[1]:.4f}", f"{clear[2]:.4f}",
+                f"{s['volume']:.3f}", s["max_items"],
+                "" if s["depth"] is None else f"{s['depth']:.4f}",
             ])
 
 
@@ -116,15 +196,20 @@ def _drawers_text(bake, entries):
     return "\n".join(lines) + "\n"
 
 
-def write_tables(directory, bake, door_entries, drawer_entries):
-    """Write both tables into `directory`; returns (csv_path, txt_path).
+def write_tables(directory, bake, door_entries, drawer_entries, shelf_entries=None):
+    """Write the three tables into `directory`; returns (csv, txt, shelves_csv).
 
-    A failure of either write is a warning, not a failed bake: the meshes and
+    A failure of any write is a warning, not a failed bake: the meshes and
     sockets are already complete, and the same rule the bake report follows
     (never raise over the text files) applies here.
+
+    A model with no storage slot at all still gets a shelves CSV with just its
+    header: the engine side reads the file unconditionally, and "no slots" is a
+    different answer from "no file".
     """
     csv_path = os.path.join(directory, f"{bake}_doors.csv")
     txt_path = os.path.join(directory, f"{bake}_drawers.txt")
+    shelves_path = os.path.join(directory, f"{bake}_shelves.csv")
     try:
         _write_doors_csv(csv_path, door_entries)
     except OSError as exc:
@@ -136,4 +221,9 @@ def write_tables(directory, bake, door_entries, drawer_entries):
     except OSError as exc:
         warn(f"bake: could not write the drawers TXT: {exc}")
         txt_path = None
-    return csv_path, txt_path
+    try:
+        _write_shelves_csv(shelves_path, shelf_entries or [])
+    except OSError as exc:
+        warn(f"bake: could not write the shelves CSV: {exc}")
+        shelves_path = None
+    return csv_path, txt_path, shelves_path

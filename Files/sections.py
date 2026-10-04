@@ -4,6 +4,7 @@ Moved verbatim from the single-module addon; no body was edited during the move.
 """
 import bpy
 import bmesh
+import json
 from mathutils import Vector, Matrix
 from math import radians, cos, sin, atan2
 from .core import (
@@ -16,6 +17,7 @@ from .core import (
     SEC_NORMAL,
     SEC_SINK,
     SEC_WARDROBE,
+    SHELF_PLAN_KEY,
     add_extruded_polygon,
     warn,
 )
@@ -73,6 +75,121 @@ def drawer_box_inset(front_x, front_w, interior_x0, interior_x1):
     return max(0.0, interior_x0 - front_x, (front_x + front_w) - interior_x1)
 
 
+def _add_compartment(plan, floor_z, top_z, x0, x1, y0, y1, kind="niche", front=None):
+    """Append ONE interaction slot spanning a whole compartment.
+
+    A slot is addressed by the opening in front of it - a door, a drawer, an
+    open front - so nothing INSIDE the compartment splits it: fifty shelf boards
+    are still one slot, a niche cut by a middle post is still one slot, and a
+    divider between two bays is an obstacle rather than a boundary. Only a
+    different opening gets a different slot, which is what lets a player hear
+    "the keys are in the second drawer" and know where to reach.
+
+    The box is in the section's own frame, captured where the compartment is
+    computed - the export never re-measures the merged carcass mesh. It is
+    deliberately the one box the caller also uses as its free volume: these
+    boxes become the engine's "is the item inside" colliders, and a board in
+    the middle of a niche does not make two colliders.
+
+    `kind` becomes the Type column (niche -> closed/open, rod, counter, drawer),
+    `front` the SOURCE object name of the door or drawer that reaches it (None
+    for an open front - a legal state, not an error). A degenerate box is
+    dropped here rather than exported at zero size.
+    """
+    if top_z - floor_z <= 0.001 or x1 - x0 <= 0.001 or y1 - y0 <= 0.001:
+        return
+    plan.append({"box": [x0, y0, floor_z, x1 - x0, y1 - y0, top_z - floor_z],
+                 "kind": kind, "front": front})
+
+
+# How much air above a slab counts as "on the table": enough for a bottle to
+# stand, low enough that a shelf above it still reads as a shelf. 5-10 cm is the
+# band the spec asks for; this is its middle.
+COUNTERTOP_SLOT_H = 0.08
+
+
+def surface_slot(ct_x, ct_y, ct_w, ct_d, ct_z, counter_thickness):
+    """The slot lying ON a countertop (or a wall shelf): a shallow air box.
+
+    Items go on a slab rather than in it, so this box is the 8 cm above the top
+    face - throw a bottle on the table and it is on the table, not "somewhere in
+    the cabinet below". It covers the whole slab footprint including overhangs,
+    because the part a player can reach is the part the box covers.
+
+    Returns None if the slab degenerates, so a broken footprint cannot produce a
+    zero-size row.
+    """
+    if ct_w <= 0.001 or ct_d <= 0.001:
+        return None
+    return {"kind": "counter", "front": None,
+            "box": [ct_x, ct_y, ct_z + counter_thickness, ct_w, ct_d,
+                    COUNTERTOP_SLOT_H]}
+
+
+def add_countertop_slot(carcass, ct_x, ct_y, ct_w, ct_d, ct_z, counter_thickness):
+    """Merge the surface slot of a slab into `carcass`'s storage plan.
+
+    Called by generate_section for its own slab and by row.py for the single
+    slab an island run shares. The island slab is authored in the frame of the
+    run's FIRST section - the same frame that section's carcass uses - so the
+    box can be stored as-is and needs no rebasing.
+    """
+    _append_shelf_plan(carcass, [
+        surface_slot(ct_x, ct_y, ct_w, ct_d, ct_z, counter_thickness)])
+
+
+def _closing_door_source(name_prefix, doors, width, x):
+    """Source object name of the door hanging in front of section-local x.
+
+    Mirrors the deterministic door naming of build_section_facades: one door is
+    always DoorL, a pair splits at the section centre. None means the front is
+    open, which is a legal state for a shelf row (an open niche), not an error.
+    """
+    if doors <= 0:
+        return None
+    if doors == 1:
+        return f"{name_prefix}_DoorL_01"
+    return f"{name_prefix}_DoorL_01" if x <= width / 2.0 else f"{name_prefix}_DoorR_02"
+
+
+def _store_shelf_plan(obj, rows):
+    """Put the storage-slot plan on the carcass object for the bake to export.
+
+    JSON because Blender custom properties only hold flat types; the plan is
+    read once by the bake. No rows - no property, so a model with no storage at
+    all exports a header-only table instead of pretending.
+    """
+    if obj is None or not rows:
+        return
+    obj[SHELF_PLAN_KEY] = json.dumps(rows)
+
+
+def _append_shelf_plan(obj, rows):
+    """Merge slots recorded after build_carcass (drawers, countertop) into it.
+
+    build_carcass writes its own plan when it finishes; the drawer bank and the
+    slab are only known further down generate_section, so they are appended here
+    rather than re-planned. Order is stable: compartments first, then drawers
+    bottom-up, then the countertop - which is the order the RowName indexes run
+    in.
+    """
+    if obj is None:
+        return
+    rows = [r for r in rows if r]
+    if not rows:
+        return
+    existing = obj.get(SHELF_PLAN_KEY)
+    if existing:
+        try:
+            merged = json.loads(existing)
+        except (ValueError, TypeError):
+            warn(f"sections: unreadable shelf plan on {obj.name}, replacing it")
+            merged = []
+        if isinstance(merged, list):
+            rows = merged + list(rows)
+    obj[SHELF_PLAN_KEY] = json.dumps(rows)
+
+
 # [ANCHOR: SECTION_BUILDER]
 # ============================================================
 def build_wardrobe_section(
@@ -114,6 +231,7 @@ def build_wardrobe_section(
 
     verts, faces = [], []
     boxes_data = []
+    shelf_plan = []
 
     def rec_box(x0, y0, z0, sx, sy, sz):
         add_box(verts, faces, x0, y0, z0, sx, sy, sz)
@@ -273,7 +391,17 @@ def build_wardrobe_section(
                     make_wardrobe_door("L", col_front_w, 0.0, 1)
 
             if zt in ('DOOR', 'OPEN'):
+                # A DOOR zone is closed by its own facade(s) (didx 1 is the left
+                # or single leaf, 2 the right of a pair); an OPEN zone has no
+                # facade at all. The shelves below span the column, so a pair
+                # is keyed by its left leaf - one join key per row.
+                zone_door = None
+                if zt == 'DOOR':
+                    zone_door = f"{name_prefix}_C{c_idx + 1}_Door_{z_idx + 1}_1"
+                rows_before = len(shelf_plan)
                 if zone.interior_type == 'SHELVES':
+                    # The boards are built as geometry but never split the slot:
+                    # the whole zone stays one box, addressed by its own door.
                     if zone.shelf_mode == 'EVEN' and zone.shelves_count > 0:
                         step_z = interior_h / (zone.shelves_count + 1)
                         for s in range(zone.shelves_count):
@@ -300,6 +428,27 @@ def build_wardrobe_section(
                     add_and_apply_smooth(rod)
                     if gen_collisions:
                         create_ubx_from_bbox(rod, 1, collection)
+                    # A rod is its own kind of slot: the air under the bar, from
+                    # the zone floor up to the bar itself - where the hangers
+                    # actually hang. There is no board to add, so the zone and
+                    # the usable air are the same box.
+                    if rod_z - z_interior_min > 0.001:
+                        _add_compartment(shelf_plan, z_interior_min, rod_z,
+                                         col_x, col_x + col_w, 0.0, d - t,
+                                         kind="rod", front=zone_door)
+
+                # Every non-rod zone is exactly one slot spanning its interior:
+                # an empty wardrobe column with a door in front of it is the
+                # "put a suitcase here" box, and one with boards inside is the
+                # same box - the boards are obstacles in it, not walls. Only a
+                # zone that produced no row at all gets this, so a rod with no
+                # air under its bar stays row-less rather than becoming two.
+                if (zone.interior_type != 'ROD'
+                        and len(shelf_plan) == rows_before
+                        and z_interior_max - z_interior_min > 0.001):
+                    _add_compartment(shelf_plan, z_interior_min, z_interior_max,
+                                     col_x, col_x + col_w, 0.0, d - t,
+                                     kind="niche", front=zone_door)
 
             alloc_accum_z += zh
 
@@ -307,6 +456,7 @@ def build_wardrobe_section(
     carcass = new_object(f"{name_prefix}_WardrobeCarcass", mesh, collection, parent, m_carcass["name"])
     carcass.matrix_world = matrix
     apply_box_uvs(carcass, m_carcass["u"], m_carcass["v"], m_carcass["rot"])
+    _store_shelf_plan(carcass, shelf_plan)
     if gen_collisions:
         for idx, bx in enumerate(boxes_data):
             create_ubx_box_primitive(carcass, idx + 1, *bx, collection, matrix)
@@ -335,6 +485,7 @@ def build_corner_upper_section(
     y_front = lower_depth - prev_d
     y_back = cd - t * 2 - gap
 
+    shelf_plan = []
     bm = bmesh.new()
 
     if corner_style == CORN_DIAGONAL:
@@ -463,8 +614,25 @@ def build_corner_upper_section(
 
         step = (wall_h - t) / (shelves + 1)
         for s in range(shelves):
-            sz = wall_z + step * (s + 1)
-            add_extruded_polygon(bm, shelf_poly, sz, shelf_t)
+            add_extruded_polygon(bm, shelf_poly, wall_z + step * (s + 1), shelf_t)
+        # ONE slot for the whole corner stack, boxed around the shelf polygon
+        # (the L-shape of the L-door style gets its bounding box - the engine
+        # consumes boxes); the boards inside it are obstacles, not boundaries.
+        # The corner facade is one diagonal leaf, a pair of leaves, or nothing at
+        # all (open shelves); a pair is keyed by its first leaf, one join key per
+        # row.
+        corner_door = None
+        if corner_style == CORN_DIAGONAL:
+            corner_door = f"{name_prefix}_DiagDoor"
+        elif corner_style == CORN_DOORS:
+            corner_door = f"{name_prefix}_DoorL_01"
+        pxs = [p[0] for p in shelf_poly]
+        pys = [p[1] for p in shelf_poly]
+        # wall_z + wall_h is the underside of the top plate - the compartment's
+        # true ceiling, bottom plate top face excluded by wall_z.
+        _add_compartment(shelf_plan, wall_z, wall_z + wall_h,
+                         min(pxs), max(pxs), min(pys), max(pys),
+                         front=corner_door)
 
     mesh = bpy.data.meshes.new(f"{name_prefix}_CornerCabinet")
     bm.to_mesh(mesh)
@@ -472,6 +640,7 @@ def build_corner_upper_section(
     carcass = new_object(f"{name_prefix}_CornerCabinet", mesh, collection, parent, m_carcass["name"])
     carcass.matrix_world = matrix
     apply_box_uvs(carcass, m_carcass["u"], m_carcass["v"], m_carcass["rot"])
+    _store_shelf_plan(carcass, shelf_plan)
 
     if gen_collisions:
         create_ubx_box_primitive(carcass, 1, 0, y_back, wall_z, bw1_len, t, wall_h, collection, matrix)
@@ -606,13 +775,13 @@ def build_plinth(
         verts, faces = [], []
         pfix = recess + wall_t
 
-        if is_corner_sec:  # работает
+        if is_corner_sec:
             plinth_w = width - (wall_t + gap) + recess
             y_start = recess - pfix - gap
             y_depth = d - recess + pfix + gap
             px_start = 0.0
         elif is_island:
-            # 4-сторонний теневой цоколь для островных секций
+            
             px_start = recess if is_first_sec else 0.0
             side_sub = (recess if is_first_sec else 0.0) + (recess if is_last_sec else 0.0)
             plinth_w = max(0.02, width - side_sub)
@@ -677,15 +846,20 @@ def build_carcass(
         use_drawers, is_corner_sec, ph, t,
         h, m_facade, d, lower_h,
         m_carcass,
-        has_side_walls=True, shelf_span_l=0.0, shelf_span_r=0.0
+        has_side_walls=True, shelf_span_l=0.0, shelf_span_r=0.0,
+        doors=0
 ):
     """Carcass of a regular section: sides, bottom, top, dividers, shelves, appliance tiers.
 
     has_side_walls=False and the two shelf spans are the built-in carcass of an appliance
     section that shares its neighbours' walls instead of owning its own.
+
+    `doors` is only used to label the exported shelf plan (which facade closes which
+    compartment); it never changes the geometry.
     """
     verts, faces = [], []
     boxes_data = []
+    shelf_plan = []
 
     def record_box(x0, y0, z0, sx, sy, sz):
         add_box(verts, faces, x0, y0, z0, sx, sy, sz)
@@ -746,7 +920,7 @@ def build_carcass(
         if is_upper:
             record_box(frame_x, 0, ph + h - t, frame_w, d - t, t)
         elif is_corner_sec:
-            # Накладная стенка по внешнему контуру от ph до h без пересечения боковин
+            
             record_box(0, -t - gap, ph, width, t, h)
         else:
             record_box(frame_x, 0, ph + h - t, frame_w, t * 2, t)
@@ -758,13 +932,29 @@ def build_carcass(
     if sec_type == SEC_NORMAL and has_mid_div and lower_h > 0.05:
         record_box(width / 2 - t / 2, 0, ph + t, t, d - t, lower_h - 2 * t)
 
-    if sec_type == SEC_NORMAL and shelves > 0 and lower_h > 0.1:
-        usable = lower_h - 2 * t
-        step = usable / (shelves + 1)
-        for s in range(shelves):
-            z = ph + t + step * (s + 1) - shelf_t / 2
-            if z + shelf_t < ph + lower_h - t:
-                record_box(t, 0, z, width - 2 * t, d - t, shelf_t)
+    # ONE slot per compartment, whatever it holds. The boards, the middle post
+    # and the drawer bank are obstacles inside it, not walls: the engine builds
+    # its "is the item inside" collider from this box, and a board across the
+    # middle does not make two of those. What picks the slot's identity is the
+    # opening in front of it - two doors closed -> one `closed` box on the left
+    # leaf (both leaves are the same niche), no door -> one `open` box. An open
+    # niche with nothing in it is a legal slot ("the receiver goes here"), not an
+    # error, so doors=0 no longer suppresses the row.
+    if sec_type in (SEC_NORMAL, SEC_SINK) and lower_h > 0.1:
+        if shelves > 0:
+            usable = lower_h - 2 * t
+            step = usable / (shelves + 1)
+            for s in range(shelves):
+                z = ph + t + step * (s + 1) - shelf_t / 2
+                if z + shelf_t < ph + lower_h - t:
+                    record_box(t, 0, z, width - 2 * t, d - t, shelf_t)
+        # Bottom plate top face up to the plate (drawer bank) or stretcher
+        # (plain body) above it; frame_x/frame_w are the interior span, which is
+        # the full width only when the section owns both side walls.
+        _add_compartment(shelf_plan, ph + t, ph + lower_h - t,
+                         frame_x, frame_x + frame_w, 0.0, d - t,
+                         front=_closing_door_source(name_prefix, doors, width,
+                                                    width / 2.0))
 
     # Appliance / Open Rack Shelves & Vertical Tier Dividers
     if sec_type == SEC_APPLIANCE and (shelf_rows > 0 or any(div > 0 for div in tier_dividers)):
@@ -787,6 +977,15 @@ def build_carcass(
                 sz = z_start + (s + 1) * tier_h + s * shelf_t
                 record_box(sh_x0, 0, sz, sh_x1 - sh_x0, d - t, shelf_t)
 
+            # ONE slot for the whole open rack. Fifty boards and a row of
+            # vertical dividers are obstacles inside a single reachable volume,
+            # not separate addresses - there is no door in front of it to point
+            # at, so the box is open and spans the full interior. The dividers
+            # below are still built, they simply stop dividing the export.
+            _add_compartment(shelf_plan, z_start, z_end,
+                             frame_x, frame_x + frame_w, 0.0, d - t,
+                             front=None)
+
             # Vertical dividers per tier (Tier 1 is Top)
             inner_w = width - 2 * t
             for k in range(num_tiers):
@@ -804,10 +1003,15 @@ def build_carcass(
     carcass = new_object(f"{name_prefix}_Carcass", mesh, collection, parent, m_carcass["name"])
     carcass.matrix_world = matrix
     apply_box_uvs(carcass, m_carcass["u"], m_carcass["v"], m_carcass["rot"])
+    _store_shelf_plan(carcass, shelf_plan)
 
     if gen_collisions:
         for idx, bx in enumerate(boxes_data):
             create_ubx_box_primitive(carcass, idx + 1, *bx, collection, matrix)
+
+    # Returned so generate_section can append the slots only it can see: the
+    # drawer bank (one box each) and the slab above (a surface box).
+    return carcass
 
 
 def build_section_facades(
@@ -819,7 +1023,13 @@ def build_section_facades(
         t, ph, m_facade, d,
         m_handle
 ):
-    """Doors and drawer fronts of a regular section, with their handles."""
+    """Doors and drawer fronts of a regular section, with their handles.
+
+    Returns the storage slots the drawer bank adds: one per drawer, boxed around
+    the tray cavity in the SECTION frame (the caller merges them into the
+    carcass plan, which lives in the same frame). No drawers - no slots.
+    """
+    drawer_slots = []
     if sec_type != SEC_APPLIANCE and doors > 0 and lower_h > 0.1:
         door_h = lower_h - gap * 2
         door_z = ph + gap + door_h / 2
@@ -889,6 +1099,19 @@ def build_section_facades(
 
         for di in range(drawer_count):
             front_x = gap + di * (front_w + gap)
+            # One slot per drawer: the cavity of THIS tray alone, so the engine
+            # can address "the second drawer" and pin the item to that tray
+            # rather than to the whole bank. x is inset past the tray side walls,
+            # z starts on the tray floor above its bottom board, and the front
+            # plate (y < 0) closes the slot towards the player - which is exactly
+            # the volume drawer_collider_boxes leaves empty.
+            box_w = max(2 * t, box_x1 - box_x0)
+            drawer_slots.append({
+                "kind": "drawer",
+                "front": f"{name_prefix}_Drawer_{di + 1:02d}",
+                "box": [front_x + box_x0 + t, 0.0, drawer_z + dr_lift + t,
+                        box_w - 2 * t, box_depth - t, wall_h],
+            })
             verts, faces = [], []
             add_drawer_boxes(verts, faces, front_w, drawer_h, t, box_x0, box_x1,
                              dr_lift, wall_h, box_depth)
@@ -917,6 +1140,8 @@ def build_section_facades(
             )
             handle.parent = drawer
             handle.location = (front_w / 2, -t - handle_drawer["mount_len"], drawer_h / 2)
+
+    return drawer_slots
 
 
 # Sink presentation: the bowl is its own part, so it takes the chrome material instead of
@@ -1039,8 +1264,7 @@ def build_countertop(
     ct_d = d + over_front + eff_over_back
     ct_z = ph + h
 
-    # Для самого угла: добираем нахлест влево к предыдущей секции
-    # (справа width уже увеличен на старте функции, поэтому правый край остается на зеленой линии)
+
     if sec_type == SEC_CORNER:
         ct_x -= corner_inset
         ct_w += corner_inset
@@ -1136,14 +1360,14 @@ def build_upstand(
         u_verts, u_faces = [], []
         u_boxes_data = []
 
-        # 1. Задний бортик вдоль первой стены (по оси X)
+       
         up_x = ct_x
         up_w = ct_w
         up_y = d - upstand_t
         add_box(u_verts, u_faces, up_x, up_y, up_z, up_w, upstand_t, upstand_h)
         u_boxes_data.append((up_x, up_y, up_z, up_w, upstand_t, upstand_h))
 
-        # 2. Второй бортик для угла вдоль ВТОРОЙ стены (по правому ребру X = ct_x + ct_w)
+        
         if sec_type == SEC_CORNER:
             side_up_x = ct_x + ct_w - upstand_t
             side_up_w = upstand_t
@@ -1155,7 +1379,7 @@ def build_upstand(
 
         u_mesh = create_box_from_verts(u_verts, u_faces)
         if use_bevel:
-            # Снимаем фаску с внутренних лицевых кромок обоих бортиков
+
             target_edges = []
             top_z = up_z + upstand_h
             side_x_match = ct_x + ct_w - upstand_t
@@ -1299,7 +1523,7 @@ def generate_section(
         warn(f"{name_prefix}: drawer zone {drawer_zone_h:.3f} m leaves a "
              f"{lower_h:.3f} m band below, too small for the doors - they are not built")
 
-    build_carcass(
+    carcass = build_carcass(
         name_prefix=name_prefix, width=width, sec_type=sec_type,
         shelves=shelves, has_mid_div=has_mid_div, shelf_t=shelf_t,
         gap=gap, is_island=is_island, is_upper=is_upper,
@@ -1310,11 +1534,13 @@ def generate_section(
         is_corner_sec=is_corner_sec, ph=ph, t=t,
         h=h, m_facade=m_facade, d=d,
         lower_h=lower_h, m_carcass=m_carcass,
-        has_side_walls=has_side_walls, shelf_span_l=shelf_span_l, shelf_span_r=shelf_span_r
+        has_side_walls=has_side_walls, shelf_span_l=shelf_span_l, shelf_span_r=shelf_span_r,
+        doors=doors
     )
 
-    # Standard Doors
-    build_section_facades(
+    # Standard Doors - they also hand back the drawer bank's slots, one box per
+    # tray, which merge into the same carcass plan (same frame, same RowName key).
+    _append_shelf_plan(carcass, build_section_facades(
         name_prefix=name_prefix, width=width, sec_type=sec_type,
         doors=doors, drawer_count=drawer_count, drawer_zone_h=drawer_zone_h,
         gap=gap, handle_door=handle_door,
@@ -1324,7 +1550,7 @@ def generate_section(
         use_drawers=use_drawers, lower_h=lower_h, t=t,
         ph=ph, m_facade=m_facade, d=d,
         m_handle=m_handle
-    )
+    ))
 
     if not has_top_cover or is_upper:
         return
@@ -1349,6 +1575,11 @@ def generate_section(
         parent=parent, matrix=matrix, ph=ph,
         h=h, d=d, m_counter=m_counter, sink_bevels=sink_bevels, sink_drain=sink_drain
     )
+
+    # The slab is a storage surface of its own: one shallow box on top of it,
+    # kept apart from the niche underneath, because an item thrown on the table
+    # belongs to the table and not to whatever the cabinet holds.
+    add_countertop_slot(carcass, ct_x, ct_y, ct_w, ct_d, ct_z, counter_thickness)
 
     # ============================================================
     # [ANCHOR: UPSTAND_RIM]

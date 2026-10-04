@@ -13,10 +13,11 @@ from .core import (
     SEC_SINK,
     SEC_WARDROBE,
     log,
+    warn,
 )
 from .mesh_ops import apply_bevel_to_object, apply_box_uvs, create_ubx_box_primitive
 from .primitives import create_island_countertop_mesh, new_object, solve_sink_cutout
-from .sections import generate_section, build_sink_bowl
+from .sections import generate_section, build_sink_bowl, add_countertop_slot
 
 # [ANCHOR: ROW_ORCHESTRATOR]
 # ============================================================
@@ -348,6 +349,18 @@ def build_cabinet_row(props, sections, row_name, depth, height, is_upper, base_z
                 island_ct_name = f"SM_{props.kitchen_id}_{row_name}_IslandCountertop_{span_start + 1:02d}"
                 obj_ct = new_object(island_ct_name, mesh_ct, collection, root, props.mat_countertop)
                 obj_ct.matrix_world = span_mat
+
+                # One surface slot for the one slab this run shares. It goes on
+                # the FIRST section's carcass, because that is the section whose
+                # frame span_mat - and therefore these ct_* numbers - belong to;
+                # any other section would need the box rebased first.
+                host = bpy.data.objects.get(
+                    f"SM_{props.kitchen_id}_{row_name}_Sec_{span_start + 1:02d}_Carcass")
+                if host is None:
+                    warn(f"row: island slab of '{row_name}' has no section carcass "
+                         f"to host its surface slot")
+                else:
+                    add_countertop_slot(host, ct_x, ct_y, ct_w, ct_d, ct_z, ct_h)
 
                 if props.use_bevel:
                     apply_bevel_to_object(obj_ct, props.bevel_width, props.bevel_segments)

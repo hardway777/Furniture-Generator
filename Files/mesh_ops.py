@@ -67,7 +67,7 @@ _MAP_ALIASES = {
 
 def _find_pbr_file(mat_name, suffix):
     raw_set = _pbr_set_name(mat_name).lower()
-    # Отрезаем UE-префиксы, чтобы искать "WoodDark_01" вместо "MI_WoodDark_01"
+    # Strip UE prefixes so the lookup uses "WoodDark_01" instead of "MI_WoodDark_01"
     clean_set = raw_set.removeprefix("mi_").removeprefix("m_").removeprefix("t_")
     aliases = _MAP_ALIASES.get(suffix, (suffix,))
 
@@ -77,7 +77,7 @@ def _find_pbr_file(mat_name, suffix):
         if not os.path.exists(base_folder):
             continue
         try:
-            # os.walk заходит в любые вложенные папки архива
+            # os.walk descends into any nested folder of the archive
             for root, dirs, files in os.walk(base_folder):
                 root_low = os.path.basename(root).lower()
                 folder_matches = (raw_set in root_low or clean_set in root_low)

@@ -34,6 +34,12 @@ COLLIDER_COLL_SUFFIX = "_Colliders"
 # sync_bbox_colliders finds the target whose final world transform to copy.
 UBX_FOLLOW_KEY = "ubx_follow_target"
 
+# Custom property holding the JSON shelf plan of one carcass: every shelf board, tier
+# gap and hanging rod the generator built inside it, as boxes in the section's own frame,
+# plus the source door name that closes each one. Captured at generation time, where the
+# exact box is known, so the export never has to re-measure it off the merged mesh.
+SHELF_PLAN_KEY = "shelf_plan"
+
 # Custom property holding the box centre in the target's local frame. A collider's mesh is
 # authored around its own origin - the pivot IS the box centre, which is what the engine
 # reads as the collision body's centre - so the offset that used to live in the mesh has to

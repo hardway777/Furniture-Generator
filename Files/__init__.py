@@ -79,7 +79,7 @@ def register():
     if _on_load_post not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_on_load_post)
 
-    # Запуск через 10 мс: даем Blender завершить регистрацию и снять блокировку контекста
+    # Start after 10 ms: lets Blender finish registering and release the context lock
     bpy.app.timers.register(_init_scenes_timer, first_interval=0.01)
 
 

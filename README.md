@@ -105,6 +105,15 @@ The output includes:
 - `<bake>_doors.csv` with every door, the socket it hangs on, its panel size
   and socket transform — import it directly as a UE DataTable
 - `<bake>_drawers.txt` listing the maximum travel of each drawer
+- `<bake>_shelves.csv` with one row per storage slot — one invisible box per
+  functional compartment: the whole niche behind its doors, one single drawer,
+  the surface of a countertop, the air under a hanging rod, an entire open
+  rack. Shelves and dividers inside a compartment never split its box. Each row
+  carries the section, the body, the socket of the opening that reaches it (a
+  door socket for a niche, the drawer's own socket for a drawer, empty for an
+  open front), the centre and extents in the body frame, the maximum volume in
+  litres, and — for a drawer only — its travel depth. Clear repeats Ext: these
+  boxes are what the engine turns into its "item inside" collider
 
 ## PBR Materials
 
@@ -124,11 +133,7 @@ To add custom PBR materials:
 Run validation checks from the project root:
 
 ```bash
-python verify_split.py
-python verify_b2.py
-blender --background --python verify_debug.py
-blender --background --python verify_bake.py
-blender --background --python verify_pbr.py
+blender --background --python verify_shelves.py
 cmd /c build_zip.cmd
 ```
 

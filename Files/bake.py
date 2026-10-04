@@ -40,17 +40,21 @@ Alongside the report, two engine-facing tables are written (see export_tables):
   <bake>_doors.csv    one row per door: socket, mesh, panel size, socket
                       transform - a UE DataTable straight from the file
   <bake>_drawers.txt  how far each drawer can travel out of its carcass
+  <bake>_shelves.csv  one row per storage slot: an invisible box around one
+                      functional compartment, with its join key to the
+                      opening that reaches it
 """
 import bpy
 import bmesh
 import hashlib
+import json
 import os
 import re
 from bpy.types import Operator
 from mathutils import Vector, Matrix
 
-from .core import COLLIDER_COLL_SUFFIX, warn
-from .export_tables import door_entry, drawer_entry, write_tables
+from .core import COLLIDER_COLL_SUFFIX, SHELF_PLAN_KEY, warn
+from .export_tables import door_entry, drawer_entry, shelf_entry, write_tables
 from .mesh_ops import apply_collider_flags, collider_collection, ensure_material
 from .strings import STR
 
@@ -387,7 +391,8 @@ def _fmt_pivot(point):
     return f"({x:.3f}, {y:.3f}, {z:.3f})"
 
 
-def _report_text(bake, coll_name, body, upper, doors, drawers, ubx_counts):
+def _report_text(bake, coll_name, body, upper, doors, drawers, ubx_counts,
+                 shelves=None):
     lines = []
     lines.append(f"Запекание для экспорта: {bake}")
     lines.append(f"Коллекция: {coll_name}")
@@ -411,6 +416,20 @@ def _report_text(bake, coll_name, body, upper, doors, drawers, ubx_counts):
     lines.append(f"Ящики (уникальных: {len(drawers)} из {total_src_drawers}):")
     for d in drawers:
         lines.append(f"  {d['name']} — сокеты: {', '.join(d['sockets'])}")
+    lines.append("")
+    lines.append(f"Слоты хранения: {len(shelves or [])}")
+    for s in shelves or []:
+        if s["door_socket"]:
+            via = "ящик" if s["type"] == "drawer" else "дверь"
+            closing = f", {via} {s['door_socket']}"
+        elif s["type"] == "counter":
+            closing = ", поверхность"
+        else:
+            closing = ", открытая"
+        lines.append(f"  {s['row_name']} — {s['type']}, корпус {s['body']}, "
+                     f"секция {s['section']}, габарит "
+                     f"{s['ext'][0] * 1000:.0f}×{s['ext'][1] * 1000:.0f}×"
+                     f"{s['ext'][2] * 1000:.0f} мм{closing}")
     return "\n".join(lines) + "\n"
 
 
@@ -567,6 +586,13 @@ def bake_kitchen(props, scene):
             door_rows.append(door_entry(root, sock_name, record["name"], owner,
                                         sock.matrix_world))
 
+    # ---- storage slots ----------------------------------------------------
+    # Built after the moving parts on purpose: a slot joins its opening by the
+    # socket name that table assigned - a door's for a niche, the drawer's own
+    # for a drawer row - so the sockets must exist first.
+    shelf_rows = _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name,
+                             upper_name, body_frame, upper_pivot, kid)
+
     # ---- colliders --------------------------------------------------------
     ubx_prefix = f"UBX_SM_{kid}_"
     by_name = {o.name: o for o in bpy.data.objects}
@@ -612,20 +638,24 @@ def bake_kitchen(props, scene):
             ubx_counts[owner] = body_ubx_counters[owner]
 
     # ---- report -----------------------------------------------------------
-    text = _report_text(bake, coll.name, body_info, upper_info, doors, drawers, ubx_counts)
+    text = _report_text(bake, coll.name, body_info, upper_info, doors, drawers,
+                        ubx_counts, shelf_rows)
     report_path = None
     doors_csv_path = None
     drawers_txt_path = None
+    shelves_csv_path = None
     blend = bpy.data.filepath
     if blend:
         # The engine tables live next to the report, so one bake drops every
         # text output of this name in one place.
-        doors_csv_path, drawers_txt_path = write_tables(
-            os.path.dirname(blend), bake, door_rows, drawer_rows)
+        doors_csv_path, drawers_txt_path, shelves_csv_path = write_tables(
+            os.path.dirname(blend), bake, door_rows, drawer_rows, shelf_rows)
         if doors_csv_path:
             text += f"\nДвери (CSV): {os.path.basename(doors_csv_path)}\n"
         if drawers_txt_path:
             text += f"Ящики (TXT): {os.path.basename(drawers_txt_path)}\n"
+        if shelves_csv_path:
+            text += f"Слоты хранения (CSV): {os.path.basename(shelves_csv_path)}\n"
         report_path = os.path.join(os.path.dirname(blend), f"{bake}_bake_report.txt")
         try:
             with open(report_path, "w", encoding="utf-8") as fh:
@@ -643,6 +673,7 @@ def bake_kitchen(props, scene):
         "drawers": drawers,
         "doors_csv": doors_csv_path,
         "drawers_txt": drawers_txt_path,
+        "shelves_csv": shelves_csv_path,
         "ubx_counts": ubx_counts,
         "report_path": report_path,
     }
@@ -654,6 +685,154 @@ def _record_pivot(root):
             and root.parent.name.startswith("SOCKET_"):
         return root.parent.matrix_world.copy()
     return _front_pivot(root)
+
+
+# Object name marks of the carcasses that carry a storage plan. A plan is only
+# ever written by the three section builders that lay out compartments, so
+# listing them keeps a stray property on some other object from reaching the
+# table.
+_CARCASS_MARKS = ("_Carcass", "_WardrobeCarcass", "_CornerCabinet")
+
+
+def _shelf_slot_type(row):
+    """The Type column for one plan row, straight from how it was built.
+
+    `niche` is the only kind that has to look at the front: `closed` behind a
+    door, `open` when nothing hangs in front of it. rod / counter / drawer are
+    types of their own, because the engine treats a drawer as an addressable
+    container and a countertop as a surface - neither is "a niche with a door".
+    """
+    kind = row.get("kind") or "niche"
+    if kind == "niche":
+        return "closed" if row.get("front") else "open"
+    return kind
+
+
+def _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name, upper_name,
+                body_frame, upper_pivot, kitchen_id):
+    """Storage slots of every carcass, placed in the frame of their own body.
+
+    The boxes come off the plan the generator left on the carcass (see
+    core.SHELF_PLAN_KEY), never off the baked mesh: the whole body is one mesh
+    by now, so its bounds say nothing about a single compartment.
+
+    A slot that names an opening nobody exported is dropped with a warning. The
+    DoorSocket column is a join key copied from the doors table - or, for a
+    drawer row, the drawer's own socket - so exporting a row that cannot be
+    joined would hand the engine a door it has no mesh or socket for: a silently
+    wrong wardrobe is worse than one slot fewer in the report.
+
+    Ext and Clear are the same box on purpose. These boxes are the engine's
+    "is the item inside" colliders, and a shelf board in the middle of a niche
+    does not make two of those.
+    """
+    source_to_door = {d["source"]: (d["socket"], d["body"]) for d in door_rows}
+    source_to_drawer = {d["source"]: d for d in drawer_rows}
+
+    rows = []
+    seen = set()
+    for obj in sorted(sources, key=lambda o: o.name):
+        raw = obj.get(SHELF_PLAN_KEY)
+        if not raw or not any(m in obj.name for m in _CARCASS_MARKS):
+            continue
+        try:
+            plan = json.loads(raw)
+        except (ValueError, TypeError) as exc:
+            warn(f"bake: shelf plan of '{obj.name}' is unreadable: {exc}")
+            continue
+
+        is_upper_part = _UPPER_MARK in obj.name
+        owner = upper_name if (split_upper and is_upper_part) else body_name
+        frame = upper_pivot.inverted() if (split_upper and is_upper_part) else body_frame
+
+        key = _section_key(obj.name)
+        section = f"{key[0]}_{key[1]:02d}" if key else obj.name
+        # RowName keeps the carcass name minus the SM_<kitchen id> the working
+        # model already carries, plus the slot index: stable across re-bakes (it
+        # never mentions the bake prefix) and unique within the table.
+        tail = obj.name[len("SM_"):] if obj.name.startswith("SM_") else obj.name
+        if tail.startswith(f"{kitchen_id}_"):
+            tail = tail[len(kitchen_id) + 1:]
+        base = tail
+
+        for i, plan_row in enumerate(plan, start=1):
+            box = plan_row.get("box")
+            if not box or len(box) != 6:
+                continue
+            slot_type = _shelf_slot_type(plan_row)
+            front_src = plan_row.get("front")
+            socket_name = None
+            depth = None
+            if slot_type == "drawer":
+                # A drawer row without a drawer to point at is unaddressable -
+                # "the keys are in the second ... what?" - so it goes.
+                if not front_src:
+                    warn(f"bake: slot {i} of '{obj.name}' is a drawer with no "
+                         f"source to key on - the row is skipped")
+                    continue
+                d_row = source_to_drawer.get(front_src)
+                if d_row is None:
+                    warn(f"bake: slot {i} of '{obj.name}' belongs to the drawer "
+                         f"'{front_src}', which has no drawer row - the row is skipped")
+                    continue
+                socket_name = d_row["socket"]
+                # Depth is the travel the TXT reports for this same drawer, not
+                # a second measurement of it: one drawer, one number.
+                depth = d_row["travel"]
+            elif front_src:
+                resolved = source_to_door.get(front_src)
+                if resolved is None:
+                    warn(f"bake: slot {i} of '{obj.name}' is closed by "
+                         f"'{front_src}', which has no door row - the row is skipped")
+                    continue
+                socket_name = resolved[0]
+
+            # The centre of the box, not of anything smaller: this is where an
+            # item is considered placed when it enters the slot.
+            cx = box[0] + box[3] / 2.0
+            cy = box[1] + box[4] / 2.0
+            cz = box[2] + box[5] / 2.0
+            loc = frame @ (obj.matrix_world @ Vector((cx, cy, cz)))
+            # Sizes need the rotation, too: a corner section is turned, so its
+            # local axes are not the body's. The two opposite corners of each box
+            # give the world axis-aligned span of the slot.
+            ext_lo, ext_hi = _world_span(obj.matrix_world, frame, box)
+            size = (ext_hi[0] - ext_lo[0], ext_hi[1] - ext_lo[1], ext_hi[2] - ext_lo[2])
+
+            row_name = f"{base}_Z{i:02d}"
+            if row_name in seen:
+                row_name = f"{base}_{section}_Z{i:02d}"
+            seen.add(row_name)
+            rows.append(shelf_entry(
+                row_name, section, owner, slot_type, socket_name,
+                (loc.x, loc.y, loc.z),
+                size, size,
+                1 if slot_type == "rod" else 0,
+                depth,
+            ))
+    return rows
+
+
+def _world_span(obj_matrix, frame, box):
+    """Axis-aligned (lo, hi) of a section-local box, in the body frame.
+
+    Only rotation can turn a local box, and the bake's frames are translations of
+    the world frame, so measuring the eight corners is enough and a turned corner
+    section still gets a box the engine can collide against.
+    """
+    m = frame @ obj_matrix
+    x0, y0, z0, sx, sy, sz = box
+    lo = [1e9, 1e9, 1e9]
+    hi = [-1e9, -1e9, -1e9]
+    for c in ((x0, y0, z0), (x0 + sx, y0, z0), (x0, y0 + sy, z0), (x0 + sx, y0 + sy, z0),
+              (x0, y0, z0 + sz), (x0 + sx, y0, z0 + sz), (x0, y0 + sy, z0 + sz),
+              (x0 + sx, y0 + sy, z0 + sz)):
+        p = m @ Vector(c)
+        for a in range(3):
+            v = (p.x, p.y, p.z)[a]
+            lo[a] = min(lo[a], v)
+            hi[a] = max(hi[a], v)
+    return lo, hi
 
 
 class KITCHEN_OT_Bake(Operator):

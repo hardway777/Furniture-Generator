@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "furniture_generator"
-version = "5.4.3"
+version = "5.4.4"
 name = "Furniture Modular Generator"
 tagline = "Modular furniture: Kitchens, Wardrobes, TV consoles, Dressers"
 maintainer = "Hardway"
