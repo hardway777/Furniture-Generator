@@ -70,6 +70,14 @@ TOL = 1e-3
 def clear_scene():
     for o in list(bpy.data.objects):
         bpy.data.objects.remove(o, do_unlink=True)
+    # Round-tripping an FBX in one session leaves image datablocks pointing into
+    # the PREVIOUS scene's .fbm folder, and with auto-pack on (it is, in the
+    # startup file this runs under) the next save fails on those dead paths.
+    # The next scene loads its own textures anyway, so drop the orphans - the
+    # check must hold whether auto-pack happens to be on or off.
+    for blocks in (bpy.data.materials, bpy.data.meshes, bpy.data.images):
+        for block in list(blocks):
+            blocks.remove(block)
 
 
 def read_csv(path):
@@ -165,6 +173,11 @@ def check_table(shelves_path, door_path, baked_sockets, baseline_dir):
             pre.setdefault(body, []).append(nn_of(o.name))
     slots = {}
     for r in rows:
+        # A drawer row reuses the drawer's socket, which the object scan above
+        # already counted as pre-existing - putting it here would report the
+        # drawer's own number as a clash with itself.
+        if r["Type"] == "drawer":
+            continue
         slots.setdefault(r["Body"], []).append(nn_of(r["SlotSocket"]))
 
     # Nothing on a body is numbered twice - a counter restarted at 01 would
@@ -204,6 +217,18 @@ def check_roundtrip(key, rows, fbx_path, yaw_by_section):
             "%s is not a child of a mesh (parent=%r)" % (
                 sock.name, sock.parent.name if sock.parent else None)
 
+        # A drawer row reuses the drawer's own socket, which sits on the
+        # drawer's front-face pivot, not on the compartment centre - that is
+        # what makes requirement 2 (never mint a second socket for a drawer)
+        # collide with the blanket "position matches LocX/Y/Z" check. The
+        # specific requirement wins: relocating the drawer socket would move the
+        # placement _drawers.txt and the engine already rely on, and Loc*/Depth
+        # stay where they are by design. So a drawer row is held to presence,
+        # name and parentage only; the centre and the yaw belong to the
+        # compartment sockets the bake minted.
+        if r["Type"] == "drawer":
+            continue
+
         want = (float(r["LocX"]), float(r["LocY"]), float(r["LocZ"]))
         got = sock.matrix_world.translation
         delta = max(abs(got[i] - want[i]) for i in range(3))
@@ -219,6 +244,11 @@ def check_roundtrip(key, rows, fbx_path, yaw_by_section):
                 "%s yaw %.3f deg, section %s is at %.3f deg" % (
                     r["RowName"], math.degrees(got_yaw), section,
                     math.degrees(want_yaw))
+            if not ang_close(want_yaw, 0.0):
+                # The evidence the report is asked for: a slot inside a turned
+                # section carries that section's yaw, not the body's zero.
+                print("    yaw %-9s %-32s %7.2f deg (section %s)"
+                      % (r["RowName"], sock.name, math.degrees(got_yaw), section))
 
     return len(imported)
 
@@ -258,21 +288,24 @@ def run(key, baseline_dir):
     assert coll is not None, "no BAKE collection"
     baked_sockets = [o for o in coll.all_objects
                      if o.type == 'EMPTY' and o.name.startswith("SOCKET_")]
+    # Names only from here on: the round trip wipes the scene, and a StructRNA
+    # of a removed object cannot be read afterwards.
+    baked_names = sorted((o.name for o in baked_sockets))
 
     shelves_path = os.path.join(fbx_dir, BAKE + "_shelves.csv")
+    base_dir = os.path.join(baseline_dir, key) if baseline_dir else None
     rows, door_count = check_table(shelves_path,
                                    os.path.join(fbx_dir, BAKE + "_doors.csv"),
-                                   baked_sockets, baseline_dir)
+                                   baked_sockets, base_dir)
 
-    if baseline_dir:
-        with io.open(os.path.join(baseline_dir, BAKE + "_bake_report.txt"),
+    if base_dir:
+        with io.open(os.path.join(base_dir, BAKE + "_bake_report.txt"),
                      encoding="utf-8") as fh:
             old_report = mesh_section(fh.read())
         with io.open(os.path.join(out_dir, BAKE + "_bake_report.txt"),
                      encoding="utf-8") as fh:
             new_report = mesh_section(fh.read())
         assert old_report == new_report, "the bake report's mesh section changed"
-
     # Each shelf row owns exactly one socket, and doors own theirs on top.
     assert len(baked_sockets) == len(rows) + door_count, \
         "expected %d sockets (rows %d + doors %d), found %d" % (
@@ -286,6 +319,22 @@ def run(key, baseline_dir):
                     if not ang_close(y, 0.0))
     print("  counts: doors=%d drawers=%d compartments=%d sockets=%d (imported %d)"
           % (door_count, drawers, compartments, len(baked_sockets), imported))
+
+    # The naming scheme, straight off the objects: one running counter, doors
+    # and drawers first, compartment sockets continuing past them.
+    for body in sorted({r["Body"] for r in rows}):
+        names = sorted((n for n in baked_names
+                        if n.startswith("SOCKET_" + body + "_")), key=nn_of)
+        head = names[:3]
+        tail = names[-3:] if len(names) > 6 else []
+        print("  %s - %d sockets" % (body, len(names)))
+        for n in head + tail:
+            print("    %-12s %s"
+                  % ("slot" if re.fullmatch(re.escape(body) + r"_\d{2}",
+                                            n[len("SOCKET_"):]) else "door/drawer", n))
+        if tail:
+            print("    ... %d in between" % (len(names) - 6))
+
     print("  turned sections: %s"
           % ", ".join("%s@%.0fdeg" % (s, math.degrees(yaw_by_section[s]))
                       for s in turned) or "none")
