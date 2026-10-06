@@ -112,7 +112,15 @@ _CSV_HEADER = ("RowName", "Source", "Body", "Socket", "Mesh", "Hinge",
 # litres, MaxItems a coarse reference (1 for a rod, 0 everywhere else). Depth
 # is filled only for Type=drawer, where it is the travel the drawer TXT reports.
 # Type: closed | open | rod | counter | drawer
-_SHELVES_HEADER = ("RowName", "Section", "Body", "Type", "DoorSocket",
+#
+# DoorSocket and SlotSocket answer different questions. DoorSocket is which
+# OPENING reaches the compartment - a join key copied from the doors table, and
+# for a drawer the drawer's own socket. SlotSocket is where an object placed
+# INSIDE the compartment attaches: a socket minted per exported slot and
+# parented to the slot's body mesh, except on a drawer row, which has no second
+# socket and reuses the drawer's. An empty DoorSocket (open niche, countertop,
+# rod) says nothing opens the slot; SlotSocket is never empty on an exported row.
+_SHELVES_HEADER = ("RowName", "Section", "Body", "Type", "DoorSocket", "SlotSocket",
                    "LocX", "LocY", "LocZ",
                    "ExtX", "ExtY", "ExtZ",
                    "ClearX", "ClearY", "ClearZ",
@@ -133,7 +141,7 @@ def _write_doors_csv(path, entries):
             ])
 
 
-def shelf_entry(row_name, section, body, slot_type, door_socket,
+def shelf_entry(row_name, section, body, slot_type, door_socket, slot_socket,
                 loc, ext, clear, max_items, depth=None):
     """One CSV record for a storage slot, placed in its body's frame.
 
@@ -147,6 +155,14 @@ def shelf_entry(row_name, section, body, slot_type, door_socket,
     the row instead of exporting a guess. None means nothing opens this slot
     (an open niche, a countertop, a rack with no door).
 
+    `slot_socket` is the socket an object INSIDE the compartment hangs on: one
+    minted for this row and parented to `body`, so the engine's FindMeshSockets
+    finds it inside the mesh's own node subtree. For Type=drawer it is the
+    drawer's existing socket, never a second one - a drawer already has a
+    placement and two sockets on one box would be a choice the engine has to
+    guess between. None only when `body` is missing from the bake, which the
+    bake warns about.
+
     `depth` is None except for Type=drawer, where it is the travel extent in
     metres - the same number `_drawers.txt` prints for that drawer.
     """
@@ -157,6 +173,7 @@ def shelf_entry(row_name, section, body, slot_type, door_socket,
         "body": body,
         "type": slot_type,
         "door_socket": door_socket,
+        "slot_socket": slot_socket,
         "loc": loc,
         "ext": ext,
         "clear": clear,
@@ -175,6 +192,7 @@ def _write_shelves_csv(path, entries):
             writer.writerow([
                 s["row_name"], s["section"], s["body"], s["type"],
                 s["door_socket"] if s["door_socket"] else "",
+                s["slot_socket"] if s["slot_socket"] else "",
                 f"{loc[0]:.4f}", f"{loc[1]:.4f}", f"{loc[2]:.4f}",
                 f"{ext[0]:.4f}", f"{ext[1]:.4f}", f"{ext[2]:.4f}",
                 f"{clear[0]:.4f}", f"{clear[1]:.4f}", f"{clear[2]:.4f}",

@@ -23,9 +23,18 @@ Outputs (naming per the Epic FBX Static Mesh Pipeline rules):
                           and rotates around the pivot
   SM_<prefix>_Drawer_NN   one mesh per unique drawer (front + box + handle),
                           pivot at the front face centre
-  SOCKET_<BodyName>_NN    one socket per source door/drawer, siblings of the
-                          meshes (never children - the FBX pipeline wants
-                          helpers next to the mesh, not under it)
+  SOCKET_<BodyName>_NN    one socket per source door/drawer, CHILDREN of the
+                          mesh that owns them: FbxStaticMeshImport walks the
+                          mesh's own node subtree only, so a sibling empty is
+                          dropped without a word
+  SOCKET_<BodyName>_<RowName>_NN
+                          one socket per exported storage compartment, centred
+                          on its box and turned to its section's yaw, so an
+                          object dropped on it with a zero transform sits in
+                          the slot facing the right way. NN continues the same
+                          per-body run the door and drawer sockets started, so
+                          the two kinds can never share a number. A drawer row
+                          gets none: it reuses the drawer's own socket
   UBX_<MeshName>_NN       colliders cloned and renamed after their new owner;
                           body colliders keep their world transform, door and
                           drawer colliders are rebased into the owner's frame
@@ -35,19 +44,21 @@ Identical doors/drawers (same local geometry incl. handle, same materials)
 are baked once; a hash of the geometry is stored on the object (bake_hash)
 and the report file lists which sockets each unique mesh serves.
 
-Alongside the report, two engine-facing tables are written (see export_tables):
+Alongside the report, three engine-facing tables are written (see export_tables):
 
   <bake>_doors.csv    one row per door: socket, mesh, panel size, socket
                       transform - a UE DataTable straight from the file
   <bake>_drawers.txt  how far each drawer can travel out of its carcass
   <bake>_shelves.csv  one row per storage slot: an invisible box around one
-                      functional compartment, with its join key to the
-                      opening that reaches it
+                      functional compartment, the join key to the opening that
+                      reaches it (DoorSocket) and the socket an object placed
+                      INSIDE it hangs on (SlotSocket)
 """
 import bpy
 import bmesh
 import hashlib
 import json
+import math
 import os
 import re
 from bpy.types import Operator
@@ -602,7 +613,8 @@ def bake_kitchen(props, scene):
     # socket name that table assigned - a door's for a niche, the drawer's own
     # for a drawer row - so the sockets must exist first.
     shelf_rows = _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name,
-                             upper_name, body_frame, upper_pivot, kid)
+                             upper_name, body_frame, upper_pivot, kid, coll,
+                             socket_counters)
 
     # ---- colliders --------------------------------------------------------
     ubx_prefix = f"UBX_SM_{kid}_"
@@ -739,7 +751,7 @@ def _shelf_slot_type(row):
 
 
 def _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name, upper_name,
-                body_frame, upper_pivot, kitchen_id):
+                body_frame, upper_pivot, kitchen_id, coll, socket_counters):
     """Storage slots of every carcass, placed in the frame of their own body.
 
     The boxes come off the plan the generator left on the carcass (see
@@ -751,6 +763,13 @@ def _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name, upper_n
     drawer row, the drawer's own socket - so exporting a row that cannot be
     joined would hand the engine a door it has no mesh or socket for: a silently
     wrong wardrobe is worse than one slot fewer in the report.
+
+    Every row that survives also gets a SlotSocket: an EMPTY minted here and
+    parented to the row's body mesh, at the centre of the compartment box, so an
+    object attached to it with a zero transform sits in the slot facing the way
+    its section faces. `socket_counters` is the SAME dict the door and drawer
+    loop already incremented, passed in rather than restarted, because the
+    engine rejects a second socket on a number the body is already wearing.
 
     Ext and Clear are the same box on purpose. These boxes are the engine's
     "is the item inside" colliders, and a shelf board in the middle of a niche
@@ -774,6 +793,9 @@ def _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name, upper_n
         is_upper_part = _UPPER_MARK in obj.name
         owner = upper_name if (split_upper and is_upper_part) else body_name
         frame = upper_pivot.inverted() if (split_upper and is_upper_part) else body_frame
+        # Measured, not assumed: the planned carcasses of both test scenes are
+        # pure rotations about Z, the turned sections of the L row at -90 deg.
+        yaw = _section_yaw(obj.matrix_world)
 
         key = _section_key(obj.name)
         section = f"{key[0]}_{key[1]:02d}" if key else obj.name
@@ -833,14 +855,80 @@ def _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name, upper_n
             if row_name in seen:
                 row_name = f"{base}_{section}_Z{i:02d}"
             seen.add(row_name)
+
+            # A drawer already has the socket its row was keyed on above, and a
+            # second one on the same box would leave the engine choosing between
+            # two placements nobody specified.
+            if slot_type == "drawer":
+                slot_socket = socket_name
+            else:
+                slot_socket = _mint_slot_socket(
+                    coll, socket_counters, bpy.data.objects.get(owner),
+                    row_name, loc, yaw)
+                if slot_socket is None:
+                    warn(f"bake: slot {i} of '{obj.name}' has no body '{owner}' "
+                         f"to hang its socket on - the row is skipped")
+                    continue
+
             rows.append(shelf_entry(
-                row_name, section, owner, slot_type, socket_name,
+                row_name, section, owner, slot_type, socket_name, slot_socket,
                 (loc.x, loc.y, loc.z),
                 size, size,
                 1 if slot_type == "rod" else 0,
                 depth,
             ))
     return rows
+
+
+def _section_yaw(matrix):
+    """Yaw of a section, flattened to the horizontal plane.
+
+    Measured on both test scenes: every planned carcass is a PURE rotation
+    about Z - euler x=y=0, scale 1, determinant +1 - and the turned sections of
+    the L row sit at -90 deg, so this is the section's own euler z. The axis is
+    projected rather than the euler read because "yaw only" means pitch and roll
+    are dropped, not carried into a frame the engine treats as flat.
+    """
+    x = Vector((matrix[0][0], matrix[1][0], 0.0))
+    if x.length < 1e-9:
+        return 0.0
+    x.normalize()
+    return math.atan2(x.y, x.x)
+
+
+def _mint_slot_socket(coll, counters, owner_obj, row_name, loc, yaw):
+    """One EMPTY per exported compartment, parented to its body mesh.
+
+    Returns None when `owner_obj` is missing, and the caller drops the row: a
+    shelves row promising a socket the engine cannot find is exactly the failure
+    this column exists to prevent, so it is not exported with an empty cell.
+
+    FindMeshSockets (FbxStaticMeshImport.cpp) walks the MESH's own node subtree,
+    so a sibling empty is dropped without a word - hence a child of the owner,
+    with the same keep-world recipe the door sockets use. Baked bodies sit at
+    identity, so that recipe leaves the socket's local transform equal to the
+    body-frame numbers the shelves table prints next to it.
+
+    The name is SOCKET_<owner>_<row name>_<NN>. NN continues the per-body counter
+    the door and drawer sockets already advanced, so a compartment can never be
+    handed a number that body is wearing, and the row name makes the socket
+    readable against its CSV line. The `SOCKET_<owner>_` prefix is also what
+    _purge_previous matches: without the body in front, a re-bake would leave the
+    previous run's slot sockets behind and Blender would rename the new ones.
+    """
+    if owner_obj is None:
+        return None
+    owner = owner_obj.name
+    counters[owner] = counters.get(owner, 0) + 1
+    name = f"SOCKET_{owner}_{row_name}_{counters[owner]:02d}"
+    sock = bpy.data.objects.new(name, None)
+    coll.objects.link(sock)
+    sock.empty_display_type = 'PLAIN_AXES'
+    sock.empty_display_size = 0.010
+    sock.matrix_world = Matrix.Translation(loc) @ Matrix.Rotation(yaw, 4, 'Z')
+    sock.parent = owner_obj
+    sock.matrix_parent_inverse = owner_obj.matrix_world.inverted()
+    return name
 
 
 def _world_span(obj_matrix, frame, box):
