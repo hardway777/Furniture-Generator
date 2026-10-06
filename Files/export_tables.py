@@ -67,7 +67,11 @@ def door_entry(source, socket_name, mesh_name, body_name, socket_matrix):
         "body": body_name,
         "socket": socket_name,
         "mesh": mesh_name,
-        "hinge": "R" if hi[0] <= 0.0 else "L",
+        # The engine's DataTable importer matches native enum values by NAME
+        # only (UEnum::GetIndexByNameString checks authored names for Blueprint
+        # enums alone), so spell the enumerators out: "L"/"R" would fail import
+        # and every right-hinged door would silently become left-hinged.
+        "hinge": "Right" if hi[0] <= 0.0 else "Left",
         "width": hi[0] - lo[0],
         "height": hi[2] - lo[2],
         "thickness": hi[1] - lo[1],
