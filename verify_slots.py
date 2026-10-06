@@ -325,13 +325,15 @@ def run(key, baseline_dir):
     for body in sorted({r["Body"] for r in rows}):
         names = sorted((n for n in baked_names
                         if n.startswith("SOCKET_" + body + "_")), key=nn_of)
-        head = names[:3]
-        tail = names[-3:] if len(names) > 6 else []
+        # SOCKET_<body>_NN exactly is a door or drawer socket; anything longer
+        # carries a row name and is a compartment socket.
+        def kind(n, _body=body):
+            return ("door/drawer" if re.fullmatch(re.escape(_body) + r"_\d{2}",
+                                                  n[len("SOCKET_"):]) else "slot")
+        head, tail = (names, []) if len(names) <= 7 else (names[:3], names[-3:])
         print("  %s - %d sockets" % (body, len(names)))
         for n in head + tail:
-            print("    %-12s %s"
-                  % ("slot" if re.fullmatch(re.escape(body) + r"_\d{2}",
-                                            n[len("SOCKET_"):]) else "door/drawer", n))
+            print("    %-12s %s" % (kind(n), n))
         if tail:
             print("    ... %d in between" % (len(names) - 6))
 
