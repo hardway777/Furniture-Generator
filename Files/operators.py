@@ -465,6 +465,18 @@ class KITCHEN_OT_ExportFbx(Operator):
             self.report({'ERROR'}, STR["op_export_fbx_no_collection"])
             return {'CANCELLED'}
 
+        # The file browser seeds the name field with the current blend's
+        # filename, and in folder mode it keeps the ".blend" extension instead
+        # of swapping to the filter's: confirmed as-is, the FBX bytes land in a
+        # file named "*.blend" (with a "*.fbm" texture folder beside it) and no
+        # .fbx ever exists. The dialog cannot be trusted with the extension,
+        # so it is enforced here - a bare directory gets the bake name.
+        if fbx_path.endswith(("/", "\\")) or os.path.isdir(fbx_path):
+            fbx_path = os.path.join(fbx_path, f"{report['bake']}.fbx")
+        elif not fbx_path.lower().endswith(".fbx"):
+            fbx_path = os.path.splitext(fbx_path)[0] + ".fbx"
+            warn(f"export_fbx: extension corrected to .fbx: {fbx_path}")
+
         out_dir = os.path.dirname(fbx_path)
         try:
             if out_dir:
