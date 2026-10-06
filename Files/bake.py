@@ -53,7 +53,7 @@ import re
 from bpy.types import Operator
 from mathutils import Vector, Matrix
 
-from .core import COLLIDER_COLL_SUFFIX, SHELF_PLAN_KEY, warn
+from .core import COLLIDER_COLL_SUFFIX, KITCHEN_COLL_PREFIX, SHELF_PLAN_KEY, warn
 from .export_tables import door_entry, drawer_entry, shelf_entry, write_tables
 from .mesh_ops import apply_collider_flags, collider_collection, ensure_material
 from .strings import STR
@@ -567,11 +567,22 @@ def bake_kitchen(props, scene):
         coll.objects.link(sock)
         sock.empty_display_type = 'PLAIN_AXES'
         sock.empty_display_size = 0.010
-        # Sockets live next to the meshes, never as mesh children (FBX helper
-        # rule); they are rebased into the frame of the body they belong to, so
-        # moving that body in UE takes its doors along.
+        # Sockets are CHILDREN of their owner mesh. The engine attaches a
+        # socket to a static mesh only from inside that mesh's own node
+        # subtree (FbxStaticMeshImport: FindMeshSockets runs over the mesh
+        # node array), so a sibling empty never reaches it - UE silently
+        # dropped every socket and the doors lived on their CSV fallback.
+        # The name after SOCKET_ is free-form: it lands on whatever mesh
+        # parents it (verified in 5.8), it still spells the owner for
+        # debugging. Baked bodies sit at identity, so the keep-world recipe
+        # below leaves the socket's local transform equal to the body-frame
+        # numbers the doors CSV stores.
         frame = upper_pivot.inverted() if (split_upper and is_upper_part) else body_frame
         sock.matrix_world = frame @ pivot
+        owner_obj = bpy.data.objects.get(owner)
+        if owner_obj is not None:
+            sock.parent = owner_obj
+            sock.matrix_parent_inverse = owner_obj.matrix_world.inverted()
 
         record["sockets"].append(sock_name)
         record["sources"].append(root.name)
@@ -640,6 +651,7 @@ def bake_kitchen(props, scene):
     # ---- report -----------------------------------------------------------
     text = _report_text(bake, coll.name, body_info, upper_info, doors, drawers,
                         ubx_counts, shelf_rows)
+    text += f"\nКоллекция '{coll.name}' скрыта в вьюпорте - глаз в аутлайнере вернёт её."
     report_path = None
     doors_csv_path = None
     drawers_txt_path = None
@@ -663,6 +675,17 @@ def bake_kitchen(props, scene):
         except OSError as exc:
             warn(f"bake: could not write the report file: {exc}")
             report_path = None
+
+    # Visibility after the bake - the two checkboxes in the panel. The result
+    # and the model it came from occupy the same place, so either can bury the
+    # other; each collection hides only on its own checkbox. The outliner eye
+    # brings a collection back; the FBX operator unhides the BAKE side for its
+    # own pass, so the engine export never depends on this state.
+    coll.hide_viewport = bool(props.bake_hide_bake)
+    if props.bake_hide_generated:
+        for generated in bpy.data.collections:
+            if generated.name.startswith(KITCHEN_COLL_PREFIX):
+                generated.hide_viewport = True
 
     return {
         "bake": bake,

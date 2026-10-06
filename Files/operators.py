@@ -35,7 +35,7 @@ from .properties import (
 )
 from .mesh_ops import sync_bbox_colliders
 from .row import build_cabinet_row
-from .bake import bake_kitchen
+from .bake import bake_kitchen, _sanitize_bake_name
 from .export_tables import write_tables
 from .strings import STR
 
@@ -437,6 +437,15 @@ class KITCHEN_OT_ExportFbx(Operator):
         # A filepath operator with no invoke would fire straight from the
         # panel button with an empty path and cancel: the browser is what
         # gives filter_folder and filter_glob anything to filter.
+        #
+        # Left alone, the browser seeds the name field with the current
+        # blend's filename ("Kitchen01.blend") and keeps the .blend extension
+        # even in folder mode. Seed it with the bake name + .fbx instead: the
+        # same key every exported table is written under, and the name the
+        # engine-side importer looks for first.
+        blend_dir = os.path.dirname(bpy.data.filepath)
+        bake = _sanitize_bake_name(context.scene.kitchen_props.bake_name)
+        self.filepath = os.path.join(blend_dir, f"{bake}.fbx") if blend_dir else f"{bake}.fbx"
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
@@ -464,6 +473,13 @@ class KITCHEN_OT_ExportFbx(Operator):
             warn(f"export_fbx: nothing in '{report['collection']}' to export")
             self.report({'ERROR'}, STR["op_export_fbx_no_collection"])
             return {'CANCELLED'}
+
+        # The bake hides its collection so the result does not bury the working
+        # model. Show it for the export pass - the selection check below is the
+        # export's one real safety net and should run in a state the user can
+        # see - and put the hide back in the finally.
+        coll_was_hidden = bool(coll.hide_viewport)
+        coll.hide_viewport = False
 
         # The file browser seeds the name field with the current blend's
         # filename, and in folder mode it keeps the ".blend" extension instead
@@ -500,9 +516,11 @@ class KITCHEN_OT_ExportFbx(Operator):
             return {'CANCELLED'}
         finally:
             # Runs on the failure paths too: an export is no reason to strand
-            # a hundred-object selection in the viewport.
+            # a hundred-object selection in the viewport, nor to leave the
+            # result covering the working model.
             for obj in context.view_layer.objects:
                 obj.select_set(False)
+            coll.hide_viewport = coll_was_hidden
 
         written = write_tables(
             out_dir, report["bake"],

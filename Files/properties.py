@@ -891,6 +891,11 @@ class KitchenGeneratorProps(PropertyGroup):
     # presets: a preset must not pin an export prefix.
     bake_name: StringProperty(name=STR["prop_bake_name"], default="EXP")
     bake_split_upper: BoolProperty(name=STR["prop_bake_split_upper"], default=True)
+    # What stays visible after the bake: the result and the model it came from
+    # occupy the same place, so either can bury the other. Each collection hides
+    # only on its own checkbox; the outliner eye brings it back.
+    bake_hide_bake: BoolProperty(name=STR["prop_hide_bake_after_bake"], default=True)
+    bake_hide_generated: BoolProperty(name=STR["prop_hide_generated_after_bake"], default=False)
 
     mat_facade_lower: StringProperty(name=STR["prop_mat_facade_lower"], default="MI_WoodDark_01")
     uv_facade_lower_u: FloatProperty(name=STR["prop_tile_u"], default=1.0, min=0.01, max=50.0)

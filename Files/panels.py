@@ -180,6 +180,8 @@ class KITCHEN_PT_BakePanel(Panel):
         col = layout.column(align=True)
         col.prop(props, "bake_name")
         col.prop(props, "bake_split_upper")
+        col.prop(props, "bake_hide_bake")
+        col.prop(props, "bake_hide_generated")
         col.operator("kitchen.bake_export", icon='EXPORT', text=STR["ui_bake_btn"])
         # Directly under Bake: both finish the same BAKE collection, they only
         # differ in what leaves the machine. The icon is EXPORT rather than the

@@ -346,6 +346,8 @@ STR = {
     "op_export_fbx_done": "FBX and tables written",
     "prop_bake_name": "Bake Name (SM_ Prefix)",
     "prop_bake_split_upper": "Split Upper Body",
+    "prop_hide_bake_after_bake": "Hide BAKE after bake",
+    "prop_hide_generated_after_bake": "Hide generated model after bake",
     "op_debug_scene_desc": "Apply a fixed set of parameters and rebuild, to inspect one scenario visually",
     "op_debug_scene_err_unknown": "Unknown debug scene '{key}'",
     "op_debug_scene_err_apply": "Scene '{name}' rejected: {err}",
