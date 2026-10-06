@@ -969,10 +969,16 @@ def build_carcass(
 
             # Horizontal shelves. "Shelves to walls" lets the board run past the
             # section's own edges up to the inner face of the nearest side wall on each
-            # side; a side with no wall in reach (row end, corner) keeps the default
-            # inset, so nothing sticks out of the furniture.
-            sh_x0 = -shelf_span_l if shelf_span_l > 0.0 else t
-            sh_x1 = (width + shelf_span_r) if shelf_span_r > 0.0 else (width - t)
+            # side. Spans apply to WALL-LESS built-ins only: a board crossing a wall
+            # the section itself owns intersects it. A wall-less section with a walled
+            # neighbour right at the seam (span 0) runs its shelf to its own EDGE -
+            # the neighbour's wall starts exactly there, a t-inset would leave a gap.
+            if has_side_walls:
+                sh_x0 = t
+                sh_x1 = width - t
+            else:
+                sh_x0 = -shelf_span_l if shelf_span_l > 0.0 else 0.0
+                sh_x1 = (width + shelf_span_r) if shelf_span_r > 0.0 else width
             for s in range(shelf_rows):
                 sz = z_start + (s + 1) * tier_h + s * shelf_t
                 record_box(sh_x0, 0, sz, sh_x1 - sh_x0, d - t, shelf_t)

@@ -30,6 +30,10 @@ def shelf_wall_span(sections, index, step, wall_t):
     shares one pair of walls instead of leaving a shelf end in mid-air. A corner or a
     hood gap ends the walk (their carcasses are built elsewhere), and so does the row
     end - there is no wall to reach there.
+
+    The answer is the distance to the reached wall's INNER face: the accumulated widths
+    of the wall-less neighbours in between. Adding wall_t here made the board stop at
+    the wall's OUTER face - straight through the panel (seen on KTCH_L01).
     """
     span = 0.0
     j = index + step
@@ -38,7 +42,7 @@ def shelf_wall_span(sections, index, step, wall_t):
         if getattr(s, "sec_type", None) in (SEC_CORNER, SEC_HOOD_GAP):
             return 0.0
         if not (getattr(s, "sec_type", None) == SEC_APPLIANCE and getattr(s, "no_side_walls", False)):
-            return span + wall_t
+            return span
         span += s.width
         j += step
     return 0.0
