@@ -509,7 +509,38 @@ class KITCHEN_OT_ExportFbx(Operator):
             if not self._select(members, context):
                 self.report({'ERROR'}, STR["op_export_fbx_failed"])
                 return {'CANCELLED'}
+
+            # Q12 (K-6): the tables go in BEFORE the FBX. The old order was
+            # FBX first and tables after, which is exactly "a fresh FBX next
+            # to stale tables" when a table write fails - a mix that reads as
+            # success on both sides, because the file looks new and the batch
+            # looks complete. With the tables first, a batch that failed has
+            # no FBX left to contradict it.
+            written = write_tables(
+                out_dir, report["bake"],
+                report["door_rows"], report["drawer_rows"], report["shelf_rows"])
+
+            # The batch is the three CSVs - indices 0, 1, 3. The TXT at index
+            # 2 is prose and stays outside it, so it can fail on its own
+            # without taking the export down.
+            #
+            # A batch failure is an ERROR and a CANCELLED export rather than
+            # the warning this used to print after the fact. That is what
+            # makes the engine side's invariant one line: FINISHED from this
+            # operator means a whole batch and an FBX of the same build, and
+            # the engine never has to look twice. Nothing was written on this
+            # path - _write_batch restores itself and the FBX has not been
+            # produced yet.
+            if any(path is None for path in (written[0], written[1], written[3])):
+                warn(f"export_fbx: the table batch failed, export cancelled: "
+                     f"{written}")
+                self.report({'ERROR'}, STR["op_export_fbx_batch_failed"])
+                return {'CANCELLED'}
+
             self._write_fbx(fbx_path)
+
+            if written[2] is None:
+                self.report({'WARNING'}, STR["op_export_fbx_tables_missing"])
         except Exception as exc:
             warn(f"export_fbx: FBX export failed: {exc}")
             self.report({'ERROR'}, STR["op_export_fbx_failed"])
@@ -522,12 +553,6 @@ class KITCHEN_OT_ExportFbx(Operator):
                 obj.select_set(False)
             coll.hide_viewport = coll_was_hidden
 
-        written = write_tables(
-            out_dir, report["bake"],
-            report["door_rows"], report["drawer_rows"], report["shelf_rows"])
-        if any(path is None for path in written):
-            warn(f"export_fbx: FBX saved but a table was not: {written}")
-            self.report({'WARNING'}, STR["op_export_fbx_tables_missing"])
         self.report({'INFO'}, STR["op_export_fbx_done"])
         return {'FINISHED'}
 

@@ -342,6 +342,7 @@ STR = {
     "op_export_fbx_no_source": "Nothing to export: generate the kitchen first",
     "op_export_fbx_no_collection": "Bake produced no BAKE collection to export",
     "op_export_fbx_failed": "FBX export failed, see the terminal for the reason",
+    "op_export_fbx_batch_failed": "Export cancelled: the table batch could not be written, see the terminal for the reason",
     "op_export_fbx_tables_missing": "FBX written, but not every table could be saved",
     "op_export_fbx_done": "FBX and tables written",
     "prop_bake_name": "Bake Name (SM_ Prefix)",
