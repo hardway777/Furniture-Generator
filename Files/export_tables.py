@@ -115,11 +115,15 @@ _CSV_HEADER = ("RowName", "Source", "Body", "Socket", "Mesh", "Hinge",
 #
 # DoorSocket and SlotSocket answer different questions. DoorSocket is which
 # OPENING reaches the compartment - a join key copied from the doors table, and
-# for a drawer the drawer's own socket. SlotSocket is where an object placed
+# for a drawer the drawer's mount socket. SlotSocket is where an object placed
 # INSIDE the compartment attaches: a socket minted per exported slot and
-# parented to the slot's body mesh, except on a drawer row, which has no second
-# socket and reuses the drawer's. An empty DoorSocket (open niche, countertop,
-# rod) says nothing opens the slot; SlotSocket is never empty on an exported row.
+# parented to the slot's body mesh, so the engine's FindMeshSockets finds it
+# inside that mesh's own node subtree. On a drawer row it is parented to the
+# DRAWER mesh instead, at the centre of the drawer's own frame - the component
+# it carries has to travel with the drawer, and the mount socket in DoorSocket
+# stays on the body by design. An empty DoorSocket (open niche, countertop,
+# rod) says nothing opens the slot; SlotSocket is never empty on an exported
+# row.
 _SHELVES_HEADER = ("RowName", "Section", "Body", "Type", "DoorSocket", "SlotSocket",
                    "LocX", "LocY", "LocZ",
                    "ExtX", "ExtY", "ExtZ",
@@ -150,18 +154,18 @@ def shelf_entry(row_name, section, body, slot_type, door_socket, slot_socket,
     doors table uses, so both tables can be joined on Body and share one space.
 
     `door_socket` is copied verbatim from the Socket column of the doors CSV for
-    a closed/open slot, and from the drawer's own socket for Type=drawer - an
+    a closed/open slot, and for Type=drawer the drawer's own mount socket - an
     engine join key, not a derived name, which is why an unresolved one drops
     the row instead of exporting a guess. None means nothing opens this slot
     (an open niche, a countertop, a rack with no door).
 
     `slot_socket` is the socket an object INSIDE the compartment hangs on: one
-    minted for this row and parented to `body`, so the engine's FindMeshSockets
-    finds it inside the mesh's own node subtree. For Type=drawer it is the
-    drawer's existing socket, never a second one - a drawer already has a
-    placement and two sockets on one box would be a choice the engine has to
-    guess between. None only when `body` is missing from the bake, which the
-    bake warns about.
+    minted for this row, so the engine's FindMeshSockets finds it inside the
+    mesh's own node subtree. That mesh is the row's body - except for a drawer,
+    where it is the drawer mesh, because the compartment component has to leave
+    the carcass with the drawer while the mount socket stays behind on the body.
+    None only when the drawer mesh or its mount is missing from the bake, which
+    the bake warns about and the row then drops.
 
     `depth` is None except for Type=drawer, where it is the travel extent in
     metres - the same number `_drawers.txt` prints for that drawer.

@@ -40,6 +40,11 @@ Asserted:
     own subtree, so a sibling is dropped without a word), and a compartment
     socket carries the yaw of the section that owns it - the -90 deg corner
     rows included;
+  * baked twice over: the second run's socket names are the first run's, byte
+    for byte, with no .001 anywhere - the purge reaches sockets through
+    parenthood now that no name prefix carries the bake, and a purge that
+    missed one would stay silent until a table promised a name the file does
+    not have;
   * with --baseline: the tables and the bake report may differ ONLY in socket
     names - everything else (mesh list, dimensions, transforms, materials) is
     compared with socket names masked out, so a real change still fails.
@@ -163,8 +168,14 @@ def check_baseline(base_dir, fbx_dir, out_dir):
         transform=lambda t: mask(mesh_section(t)))
 
 
-def check_table(shelves_path, door_path, baked, baseline_dir):
-    """Header, SocketSocket semantics, counters. Returns (rows, door_count)."""
+def check_table(shelves_path, door_path, baked, objects, baseline_dir):
+    """Header, SlotSocket semantics, counters. Returns (rows, door_count, meshes).
+
+    `baked` is every socket in the bake; `objects` is everything else in it as
+    well, because whose a socket is turns on the hierarchy - and a drawer's
+    collision socket is named after the drawer mesh it sits on, so that mesh has
+    to be reachable to be named."""
+
     header, rows = read_csv(shelves_path)
     assert header == list(_SHELVES_HEADER), \
         "header is not _SHELVES_HEADER: %r" % (header,)
@@ -182,7 +193,7 @@ def check_table(shelves_path, door_path, baked, baseline_dir):
     row_names = {r["RowName"] for r in rows}
 
     # Every name in the table is a name the bake actually made.
-    by_name = {o.name: o for o in baked}
+    by_name = {o.name: o for o in objects}
     for r in rows:
         assert r["SlotSocket"], "row %s has no SlotSocket" % r["RowName"]
         assert r["SlotSocket"] in by_name, \
@@ -226,16 +237,18 @@ def check_table(shelves_path, door_path, baked, baseline_dir):
     assert len(set(unique_slots)) == len(unique_slots), "duplicate compartment sockets"
 
     # Classification by hierarchy: whose socket it is is a scene fact, and the
-    # name only has to agree with it.
+    # name only has to agree with it. A socket either hangs on a body - a door or
+    # drawer mount, or a compartment - or on a drawer mesh, which is where a
+    # compartment component has to live if it is to travel with the drawer.
     bodies = {r["Body"] for r in rows} | {r["Body"] for r in door_rows}
-    drawer_meshes = sorted(o.name for o in baked
+    drawer_meshes = sorted(o.name for o in objects
                            if o.type == "MESH" and DRAWER_MESH_RE.match(o.name))
-    on_body = []
+    parents = []
     for o in baked:
         parent = o.parent.name if o.parent else None
         assert parent, "%s is a root socket" % o.name
         if parent in drawer_meshes or parent in bodies:
-            on_body.append(parent)
+            parents.append(parent)
         else:
             raise AssertionError("%s hangs on unexpected parent %r" % (o.name, parent))
 
@@ -253,7 +266,7 @@ def check_table(shelves_path, door_path, baked, baseline_dir):
         if MOUNT_OWNER_RE.match(owner) or o.name in door_sockets:
             moving.setdefault(o.parent.name, []).append(nn)
 
-    for parent in sorted(set(on_body) | set(slots)):
+    for parent in sorted(set(parents) | set(slots)):
         a_all, b_all = moving.get(parent, []), slots.get(parent, [])
         a, b = sorted(set(a_all)), sorted(set(b_all))
         assert len(a) == len(a_all), "%s has two mount sockets numbered alike" % parent
@@ -266,14 +279,18 @@ def check_table(shelves_path, door_path, baked, baseline_dir):
                 "%s compartment sockets restart the counter: mounts %r, slots %r" \
                 % (parent, a, b)
 
-    # One collision socket per drawer mesh, named for that mesh.
+    # Exactly one collision socket per drawer mesh, named for that mesh and
+    # first on it - a second would be a placement the engine has to choose
+    # between, which is the ambiguity this naming exists to remove.
     for mesh in drawer_meshes:
         idx = DRAWER_MESH_RE.match(mesh).group(1)
-        owners = sorted({split_socket(n)[0] for n in
-                         (o.name for o in baked if o.parent is by_name.get(mesh))})
-        want = "DrawerCol" + idx
-        assert owners == [want], \
-            "%s carries %r, want exactly [%r]" % (mesh, owners, want)
+        on_mesh = sorted((o.name for o in baked
+                          if o.parent is by_name.get(mesh)), key=nn_of)
+        assert len(on_mesh) == 1, \
+            "%s carries %r, want exactly one collision socket" % (mesh, on_mesh)
+        owner, nn = split_socket(on_mesh[0])
+        assert owner == "DrawerCol" + idx and nn == 1, \
+            "%s carries %s, want SOCKET_DrawerCol%s_01" % (mesh, on_mesh[0], idx)
 
     # Every drawer row's compartment socket lands on its own Loc once the
     # drawer is closed - that is the whole claim about "the centre".
@@ -382,22 +399,45 @@ def run(key, baseline_dir):
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out_dir, key + ".blend"))
     assert bpy.ops.kitchen.bake_export() == {'FINISHED'}, "bake " + key
 
+    # Bake twice. The purge can no longer reach a socket by name prefix, because
+    # sockets are named for who they are FOR and not for the mesh they hang off;
+    # it reaches them through parenthood instead. If that ever misses one, this
+    # second run leaves the first run's sockets sitting there and Blender hands
+    # the new ones .001 suffixes - a name no table would then promise. The whole
+    # claim is that a re-bake is a no-op on names.
+    once = sorted(o.name for o in bpy.data.collections["BAKE_" + BAKE].all_objects
+                  if o.type == 'EMPTY' and o.name.startswith("SOCKET_"))
+    assert bpy.ops.kitchen.bake_export() == {'FINISHED'}, "re-bake " + key
+    twice = sorted(o.name for o in bpy.data.collections["BAKE_" + BAKE].all_objects
+                   if o.type == 'EMPTY' and o.name.startswith("SOCKET_"))
+    assert once == twice, \
+        "a re-bake is not a no-op on names:\n  first  %r\n  second %r" \
+        % (once, twice)
+    renamed = [n for n in twice if "." in n.rsplit("_", 1)[-1]]
+    assert not renamed, "Blender renamed the new sockets: %r" % renamed
+
     fbx_path = os.path.join(fbx_dir, BAKE + ".fbx")
     assert bpy.ops.kitchen.export_fbx(filepath=fbx_path) == {'FINISHED'}, "export " + key
 
-    # Sockets as Blender has them, before the file is round-tripped.
+    # Sockets as Blender has them, before the file is round-tripped. Everything
+    # in the bake too: a collision socket is named after the drawer mesh it sits
+    # on, so that mesh has to be there to be matched against.
     coll = bpy.data.collections.get("BAKE_" + BAKE)
     assert coll is not None, "no BAKE collection"
-    baked = [o for o in coll.all_objects
+    objects = list(coll.all_objects)
+    baked = [o for o in objects
              if o.type == 'EMPTY' and o.name.startswith("SOCKET_")]
     # Names only from here on: the round trip wipes the scene, and a StructRNA
-    # of a removed object cannot be read afterwards.
+    # of a removed object cannot be read afterwards - parentage included, which
+    # is the half of the naming scheme that says whose the socket is.
     baked_names = sorted((o.name for o in baked))
+    parent_of = {o.name: (o.parent.name if o.parent else None) for o in baked}
 
     shelves_path = os.path.join(fbx_dir, BAKE + "_shelves.csv")
     base_dir = os.path.join(baseline_dir, key) if baseline_dir else None
     rows, door_count, drawer_meshes = check_table(
-        shelves_path, os.path.join(fbx_dir, BAKE + "_doors.csv"), baked, base_dir)
+        shelves_path, os.path.join(fbx_dir, BAKE + "_doors.csv"),
+        baked, objects, base_dir)
 
     if base_dir:
         check_baseline(base_dir, fbx_dir, out_dir)
@@ -420,9 +460,8 @@ def run(key, baseline_dir):
           % (door_count, drawers, compartments, len(drawer_meshes),
              len(baked), imported))
 
-    # The naming scheme, straight off the objects and grouped by the mesh that
-    # owns them - hierarchy first, the name only has to agree.
-    parent_of = {o.name: (o.parent.name if o.parent else None) for o in baked}
+    # The naming scheme, grouped by the mesh that owns them - hierarchy first,
+    # the name only has to agree with it.
     groups = {}
     for n in baked_names:
         groups.setdefault(parent_of[n], []).append(n)

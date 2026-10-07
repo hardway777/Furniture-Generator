@@ -23,18 +23,29 @@ Outputs (naming per the Epic FBX Static Mesh Pipeline rules):
                           and rotates around the pivot
   SM_<prefix>_Drawer_NN   one mesh per unique drawer (front + box + handle),
                           pivot at the front face centre
-  SOCKET_<BodyName>_NN    one socket per source door/drawer, CHILDREN of the
-                          mesh that owns them: FbxStaticMeshImport walks the
-                          mesh's own node subtree only, so a sibling empty is
-                          dropped without a word
-  SOCKET_<BodyName>_<RowName>_NN
-                          one socket per exported storage compartment, centred
-                          on its box and turned to its section's yaw, so an
-                          object dropped on it with a zero transform sits in
-                          the slot facing the right way. NN continues the same
-                          per-body run the door and drawer sockets started, so
-                          the two kinds can never share a number. A drawer row
-                          gets none: it reuses the drawer's own socket
+  SOCKET_<ForWhom>_NN     sockets, named for who they are FOR and not for the
+                          mesh they hang off - the hierarchy already answers
+                          whose they are, so the name may say for whom. They
+                          are CHILDREN of that mesh: FbxStaticMeshImport walks
+                          the mesh's own node subtree only, so a sibling empty
+                          is dropped without a word. Four kinds of owner:
+                            Door<NN>       for unique door mesh SM_.._Door_NN
+                            Drawer<NN>     for unique drawer mesh .._Drawer_NN
+                            <RowName>      for the storage compartment itself
+                            DrawerCol<NN>  for the compartment component of
+                                           drawer mesh NN - it must ride the
+                                           drawer out of the carcass, so it
+                                           hangs on the drawer and not on the
+                                           body the mount socket stays on
+                          NN is still one running counter per parent mesh:
+                          doors and drawers take it first, compartment
+                          sockets continue past them, so no body ever wears
+                          the same number twice.
+  SOCKET_ on the drawer mesh also carries the compartment centre of that
+                          drawer, expressed in the drawer's own frame: the
+                          engine parents the drawer to its mount socket, so
+                          this offset is what puts the component back on the
+                          shelf table's Loc once the drawer is closed.
   UBX_<MeshName>_NN       colliders cloned and renamed after their new owner;
                           body colliders keep their world transform, door and
                           drawer colliders are rebased into the owner's frame
@@ -92,11 +103,33 @@ def _sanitize_bake_name(raw):
     return name or "EXP"
 
 
+def _for_whom(mesh_name, bake):
+    """Who a socket on `mesh_name` is for: Door01, Drawer01, ...
+
+    SM_<bake>_Door_01 -> Door01. The parent mesh already says whose the socket
+    is, so spelling it again would only duplicate the hierarchy; what the name
+    has left to carry is the mesh on the other end.
+    """
+    prefix = f"SM_{bake}_"
+    tail = mesh_name[len(prefix):] if mesh_name.startswith(prefix) else mesh_name
+    return tail.replace("_", "")
+
+
 def _purge_previous(bake, scene):
     """A re-bake replaces the previous bake of the same name, nothing else."""
-    prefixes = (f"SM_{bake}_", f"UBX_SM_{bake}_", f"SOCKET_SM_{bake}_")
+    prefixes = (f"SM_{bake}_", f"UBX_SM_{bake}_")
     victims = [o for o in list(bpy.data.objects) if o.name.startswith(prefixes)]
+    # Socket names say who they are FOR, so no prefix above reaches them any
+    # more. But the bake makes every socket a CHILD of the mesh it belongs to,
+    # and that relationship is what carries them off. Leaving them behind is
+    # not cosmetic: Blender would hand the next run's sockets .001 suffixes,
+    # and the tables would then promise names that are not in the file.
+    sockets = [child for o in victims
+               for child in o.children_recursive
+               if child.name.startswith("SOCKET_")]
     meshes = [o.data for o in victims if o.data is not None]
+    for o in sockets:
+        bpy.data.objects.remove(o, do_unlink=True)
     for o in victims:
         bpy.data.objects.remove(o, do_unlink=True)
     for me in meshes:
@@ -573,7 +606,11 @@ def bake_kitchen(props, scene):
             bpy.data.meshes.remove(mesh)
 
         socket_counters[owner] += 1
-        sock_name = f"SOCKET_{owner}_{socket_counters[owner]:02d}"
+        # Named for the unique mesh it lets attach - SM_<bake>_Door_01 becomes
+        # Door01 - and not for the body it hangs off, because the parent is
+        # already the answer to "whose is this". The counter stays the body's,
+        # so a compartment socket cannot be handed a number this body wears.
+        sock_name = f"SOCKET_{_for_whom(record['name'], bake)}_{socket_counters[owner]:02d}"
         sock = bpy.data.objects.new(sock_name, None)
         coll.objects.link(sock)
         sock.empty_display_type = 'PLAIN_AXES'
@@ -760,16 +797,20 @@ def _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name, upper_n
 
     A slot that names an opening nobody exported is dropped with a warning. The
     DoorSocket column is a join key copied from the doors table - or, for a
-    drawer row, the drawer's own socket - so exporting a row that cannot be
+    drawer row, the drawer's mount socket - so exporting a row that cannot be
     joined would hand the engine a door it has no mesh or socket for: a silently
     wrong wardrobe is worse than one slot fewer in the report.
 
-    Every row that survives also gets a SlotSocket: an EMPTY minted here and
-    parented to the row's body mesh, at the centre of the compartment box, so an
-    object attached to it with a zero transform sits in the slot facing the way
-    its section faces. `socket_counters` is the SAME dict the door and drawer
-    loop already incremented, passed in rather than restarted, because the
-    engine rejects a second socket on a number the body is already wearing.
+    Every row that survives also gets a SlotSocket: an EMPTY minted here at the
+    centre of the compartment box, so an object attached to it with a zero
+    transform sits in the slot facing the way its section faces. For an ordinary
+    compartment it is parented to the row's body mesh; for a drawer it is
+    parented to the DRAWER mesh instead, because the thing it carries has to
+    leave the carcass with the drawer. `socket_counters` is the SAME dict the
+    door and drawer loop already incremented, passed in rather than restarted,
+    because the engine rejects a second socket on a number the body is already
+    wearing - the drawer's collision socket counts against its own mesh for the
+    same reason.
 
     Ext and Clear are the same box on purpose. These boxes are the engine's
     "is the item inside" colliders, and a shelf board in the middle of a niche
@@ -801,7 +842,9 @@ def _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name, upper_n
         section = f"{key[0]}_{key[1]:02d}" if key else obj.name
         # RowName keeps the carcass name minus the SM_<kitchen id> the working
         # model already carries, plus the slot index: stable across re-bakes (it
-        # never mentions the bake prefix) and unique within the table.
+        # never mentions the bake prefix) and unique within the table. It is
+        # also what a compartment socket is NAMED for, so that stability is now
+        # load-bearing twice over.
         tail = obj.name[len("SM_"):] if obj.name.startswith("SM_") else obj.name
         if tail.startswith(f"{kitchen_id}_"):
             tail = tail[len(kitchen_id) + 1:]
@@ -856,11 +899,19 @@ def _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name, upper_n
                 row_name = f"{base}_{section}_Z{i:02d}"
             seen.add(row_name)
 
-            # A drawer already has the socket its row was keyed on above, and a
-            # second one on the same box would leave the engine choosing between
-            # two placements nobody specified.
+            # A drawer's compartment component has to leave the carcass with
+            # the drawer, so it hangs on the drawer mesh at the centre of the
+            # space items are dropped into - not on the mount socket, which
+            # stays on the body and is only where the drawer itself attaches.
             if slot_type == "drawer":
-                slot_socket = socket_name
+                slot_socket = _mint_drawer_socket(
+                    coll, socket_counters, bpy.data.objects.get(d_row["mesh"]),
+                    d_row["mesh"], loc, bpy.data.objects.get(socket_name))
+                if slot_socket is None:
+                    warn(f"bake: slot {i} of '{obj.name}' has no drawer mesh or "
+                         f"mount socket to hang its compartment socket on - "
+                         f"the row is skipped")
+                    continue
             else:
                 slot_socket = _mint_slot_socket(
                     coll, socket_counters, bpy.data.objects.get(owner),
@@ -909,18 +960,18 @@ def _mint_slot_socket(coll, counters, owner_obj, row_name, loc, yaw):
     identity, so that recipe leaves the socket's local transform equal to the
     body-frame numbers the shelves table prints next to it.
 
-    The name is SOCKET_<owner>_<row name>_<NN>. NN continues the per-body counter
-    the door and drawer sockets already advanced, so a compartment can never be
-    handed a number that body is wearing, and the row name makes the socket
-    readable against its CSV line. The `SOCKET_<owner>_` prefix is also what
-    _purge_previous matches: without the body in front, a re-bake would leave the
-    previous run's slot sockets behind and Blender would rename the new ones.
+    The name is SOCKET_<row name>_<NN>. NN continues the per-body counter the
+    door and drawer sockets already advanced, so a compartment can never be
+    handed a number that body is wearing, and the row name is both the owner
+    (for whom: this compartment) and the key back to the CSV line. The parent
+    is deliberately NOT spelled into it - _purge_previous reaches these
+    through the body mesh they hang off, not through a name prefix.
     """
     if owner_obj is None:
         return None
     owner = owner_obj.name
     counters[owner] = counters.get(owner, 0) + 1
-    name = f"SOCKET_{owner}_{row_name}_{counters[owner]:02d}"
+    name = f"SOCKET_{row_name}_{counters[owner]:02d}"
     sock = bpy.data.objects.new(name, None)
     coll.objects.link(sock)
     sock.empty_display_type = 'PLAIN_AXES'
@@ -928,6 +979,58 @@ def _mint_slot_socket(coll, counters, owner_obj, row_name, loc, yaw):
     sock.matrix_world = Matrix.Translation(loc) @ Matrix.Rotation(yaw, 4, 'Z')
     sock.parent = owner_obj
     sock.matrix_parent_inverse = owner_obj.matrix_world.inverted()
+    return name
+
+
+def _mint_drawer_socket(coll, counters, mesh_obj, mesh_name, loc, mount):
+    """One EMPTY on the DRAWER mesh, at that drawer's compartment centre.
+
+    The component this socket carries has to travel when the drawer opens: a
+    trigger hanging off the body would sit in the closed drawer's space while
+    the drawer and everything in it are somewhere else entirely. So it hangs
+    on the drawer mesh, and the position is written in the drawer's OWN frame
+    - mount socket inverse times the compartment centre. The engine parents
+    the drawer to that mount socket, so multiplying back yields Loc exactly,
+    whatever rotation the mount happens to carry.
+
+    Identical drawers bake into ONE mesh and a socket lives on the mesh, so a
+    single socket serves every instance - and it has to, because the offset is
+    identical for each (they are the same drawer). The rows still differ: each
+    names its own mount socket, which is what tells the instances apart.
+
+    Returns None when either end is missing, and the caller drops the row: a
+    shelves row promising a socket the engine cannot find is the failure this
+    whole column exists to prevent.
+    """
+    if mesh_obj is None or mount is None:
+        return None
+    target = mount.matrix_world.inverted() @ Matrix.Translation(loc)
+    idx = mesh_name.rsplit("_", 1)[-1]
+    # Identical drawers bake into one mesh, and the centre is the same for every
+    # instance of the same drawer - so the socket already minted for this mesh is
+    # the answer for the next row too. A second one would hand the engine two
+    # placements to choose between; a different one would mean two rows agree on
+    # a mesh and disagree on where its compartment is, which no wording of the
+    # table can express, so that row is dropped instead.
+    existing = next((c for c in mesh_obj.children
+                     if c.name.startswith(f"SOCKET_DrawerCol{idx}_")), None)
+    if existing is not None:
+        if (existing.matrix_world.translation - target.translation).length > 1e-6:
+            warn(f"bake: compartment centre of {mesh_name} at {tuple(round(v, 4) for v in target.translation)} "
+                 f"disagrees with {existing.name} at {tuple(round(v, 4) for v in existing.matrix_world.translation)} - "
+                 f"one mesh cannot hold two compartments, the row is skipped")
+            return None
+        return existing.name
+
+    counters[mesh_name] = counters.get(mesh_name, 0) + 1
+    name = f"SOCKET_DrawerCol{idx}_{counters[mesh_name]:02d}"
+    sock = bpy.data.objects.new(name, None)
+    coll.objects.link(sock)
+    sock.empty_display_type = 'PLAIN_AXES'
+    sock.empty_display_size = 0.010
+    sock.matrix_world = mount.matrix_world.inverted() @ Matrix.Translation(loc)
+    sock.parent = mesh_obj
+    sock.matrix_parent_inverse = mesh_obj.matrix_world.inverted()
     return name
 
 
