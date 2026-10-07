@@ -110,10 +110,13 @@ The output includes:
   the surface of a countertop, the air under a hanging rod, an entire open
   rack. Shelves and dividers inside a compartment never split its box. Each row
   carries the section, the body, the socket of the opening that reaches it (a
-  door socket for a niche, the drawer's own socket for a drawer, empty for an
-  open front), the centre and extents in the body frame, the maximum volume in
-  litres, and — for a drawer only — its travel depth. Clear repeats Ext: these
-  boxes are what the engine turns into its "item inside" collider
+  door socket for a niche, the drawer's own mount socket for a drawer, empty
+  for an open front), a second socket for the compartment itself — parented to
+  the body, except on a drawer row where it hangs on the drawer mesh so the
+  trigger travels out with the drawer — the centre and extents in the body
+  frame, the maximum volume in litres, and — for a drawer only — its travel
+  depth. Clear repeats Ext: these boxes are what the engine turns into its
+  "item inside" collider
 
 ### Export FBX & Tables
 
