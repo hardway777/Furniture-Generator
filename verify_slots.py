@@ -84,7 +84,7 @@ if "--baseline" in argv:
 
 OUT = os.path.join(ROOT, ".agent_tmp", "slot_out")
 BAKE = "SLOTSLOT"
-SCENES = ("bedside_dresser", "full_l_kitchen")
+SCENES = ("bedside_dresser", "full_l_kitchen", "wardrobe_column")
 TOL = 1e-3
 
 # SOCKET_<owner>_NN, where owner itself may contain underscores.
@@ -550,6 +550,13 @@ def run(key, baseline_dir):
 
     shelves_path = os.path.join(fbx_dir, BAKE + "_shelves.csv")
     base_dir = os.path.join(baseline_dir, key) if baseline_dir else None
+    if base_dir and not os.path.isdir(base_dir):
+        # A snapshot only covers the scenes it was taken from. Refusing to run
+        # would say "regression" about a scene the snapshot predates; skipping
+        # silently would say nothing at all. So it is named in the log, the way
+        # the drawers CSV reports the same situation for a file.
+        print("  baseline: no snapshot for %s, comparison skipped" % key)
+        base_dir = None
     rows, door_count, drawer_meshes = check_table(
         shelves_path, os.path.join(fbx_dir, BAKE + "_doors.csv"),
         baked, objects, base_dir)
