@@ -574,30 +574,57 @@ def run(key, baseline_dir):
     # way - fresh doors next to shelves left over from the previous bake -
     # would diverge on the engine side with no error anywhere.
     #
-    # _shelves.csv made into a directory reproduces the failure the write
-    # used to swallow per file: the shelves write raises, and what matters is
-    # whether the other two still land. The FBX in the same directory is
-    # expected - only the tables are in question.
+    # _shelves.csv made into a directory is "your importer is holding the
+    # file": the swap for that one refuses, and what matters is what the
+    # export does about it - not whether the FBX still lands, but whether it
+    # stops claiming success at all.
     poison_dir = os.path.join(fbx_dir, "q11_batch")
     _rm_tree(poison_dir)
     os.makedirs(poison_dir)
     os.mkdir(os.path.join(poison_dir, BAKE + "_shelves.csv"))
+    # The engine side asked for the invariant to be one line (K-6): FINISHED
+    # means "a whole batch and an FBX of the same build". A batch that failed
+    # therefore has to CANCELLED, not warn - and the tables are written
+    # BEFORE the FBX, because the reverse order is exactly "fresh FBX, stale
+    # tables", which reads as success on both sides.
     try:
-        assert bpy.ops.kitchen.export_fbx(
-            filepath=os.path.join(poison_dir, BAKE + ".fbx")) == {'FINISHED'}, \
-            "poison export " + key
-        # The FBX has to be there, or "no CSV" would prove only that the probe
-        # never ran rather than that the batch refused to go half way.
-        assert os.path.isfile(os.path.join(poison_dir, BAKE + ".fbx")), \
-            "poison export produced no FBX - the probe did not run"
+        # An operator that reports ERROR and returns CANCELLED does not hand
+        # {'CANCELLED'} back to Python - Blender raises RuntimeError with the
+        # reported message in it. That raise IS the observable contract, so
+        # the message is matched too: "cancelled for an unrelated reason"
+        # would look identical otherwise.
+        try:
+            bpy.ops.kitchen.export_fbx(
+                filepath=os.path.join(poison_dir, BAKE + ".fbx"))
+        except RuntimeError as exc:
+            assert "table batch" in str(exc), \
+                "the export failed for an unrelated reason: %s" % exc
+        else:
+            raise AssertionError(
+                "a failed batch must cancel the export, it finished instead")
+        assert not os.path.isfile(os.path.join(poison_dir, BAKE + ".fbx")), \
+            "the FBX was written although the batch failed"
         landed = sorted(n for n in os.listdir(poison_dir)
                         if n.endswith(".csv")
                         and os.path.isfile(os.path.join(poison_dir, n)))
         assert not landed, \
-            "the tables are not one batch: shelves could not be written, " \
-            "but %r were" % landed
+            "a failed batch must write nothing, but %r were written" % landed
         temps = sorted(n for n in os.listdir(poison_dir) if n.endswith(".tmp"))
         assert not temps, "half-written tables left behind: %r" % temps
+
+        # The repeat, without which CANCELLED proves nothing: it is also what
+        # any unrelated breakage - a bad path, an unselectable collection -
+        # would return. Same directory, same operator, only the poison gone.
+        os.rmdir(os.path.join(poison_dir, BAKE + "_shelves.csv"))
+        result = bpy.ops.kitchen.export_fbx(
+            filepath=os.path.join(poison_dir, BAKE + ".fbx"))
+        assert result == {'FINISHED'}, \
+            "the same export with the poison removed did not finish: %r" % (result,)
+        for suffix in ("_doors.csv", "_drawers.csv", "_shelves.csv"):
+            assert os.path.isfile(os.path.join(poison_dir, BAKE + suffix)), \
+                "the clean repeat did not write %s" % suffix
+        assert os.path.isfile(os.path.join(poison_dir, BAKE + ".fbx")), \
+            "the clean repeat did not write the FBX"
     finally:
         _rm_tree(poison_dir)
     print("  table batch: a failed write leaves no partial set")
