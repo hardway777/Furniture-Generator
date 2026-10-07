@@ -304,10 +304,10 @@ SM_SLOTSLOT_Drawer_01:
   секции дают `-90°`:
 
   ```
-  Base_Sec_04_Carcass_Z01  SOCKET_..._Z01_13   -90.00°
-  Base_Sec_05_Carcass_Z01  SOCKET_..._Z01_15   -90.00°
-  Upper_Sec_04_Carcass_Z01 SOCKET_..._Z01_09   -90.00°
-  Upper_Sec_06_Carcass_Z01 SOCKET_..._Z01_10   -90.00°
+  Base_Sec_04_Carcass_Z01   SOCKET_Base_Sec_04_Carcass_Z01_13    -90.00°
+  Base_Sec_05_Carcass_Z01   SOCKET_Base_Sec_05_Carcass_Z01_15    -90.00°
+  Upper_Sec_04_Carcass_Z01  SOCKET_Upper_Sec_04_Carcass_Z01_09   -90.00°
+  Upper_Sec_06_Carcass_Z01  SOCKET_Upper_Sec_06_Carcass_Z01_10   -90.00°
   ```
 
   Предмет, посаженный на такой сокет с нулевым трансформом, встаёт лицом

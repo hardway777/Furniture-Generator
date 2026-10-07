@@ -45,6 +45,9 @@ Asserted:
     parenthood now that no name prefix carries the bake, and a purge that
     missed one would stay silent until a table promised a name the file does
     not have;
+  * every concrete socket name written in NOTE_FOR_KODA.MD is one the bake
+    actually makes - the note is what the engine side codes against, so an
+    example that is not in the file is worse than no example;
   * with --baseline: the tables and the bake report may differ ONLY in socket
     names - everything else (mesh list, dimensions, transforms, materials) is
     compared with socket names masked out, so a real change still fails.
@@ -166,6 +169,26 @@ def check_baseline(base_dir, fbx_dir, out_dir):
         os.path.join(base_dir, BAKE + "_bake_report.txt"),
         os.path.join(out_dir, BAKE + "_bake_report.txt"),
         transform=lambda t: mask(mesh_section(t)))
+
+
+def check_note(known):
+    """Every concrete socket name the contract shows must be a real one.
+
+    NOTE_FOR_KODA.MD is what the engine side codes against, so an example that
+    is not in the file is worse than no example - someone writes code to it.
+    Only names that look finished are checked: SOCKET_<ForWhom>_NN is a
+    pattern, not an example, and an elision is not worth chasing.
+    """
+    path = os.path.join(ROOT, "NOTE_FOR_KODA.MD")
+    if not os.path.isfile(path):
+        return
+    text = io.open(path, encoding="utf-8").read()
+    concrete = {n for n in set(re.findall(r"SOCKET_[A-Za-z0-9_]+", text))
+                if re.search(r"_\d{2}$", n)}
+    unknown = sorted(concrete - set(known))
+    assert not unknown, \
+        "NOTE_FOR_KODA.MD shows socket names the bake does not make: %r" % unknown
+    print("  note: %d concrete socket names, all real" % len(concrete))
 
 
 def check_table(shelves_path, door_path, baked, objects, baseline_dir):
@@ -441,6 +464,11 @@ def run(key, baseline_dir):
 
     if base_dir:
         check_baseline(base_dir, fbx_dir, out_dir)
+
+    # The note's examples are full_l_kitchen's (it says so in 4.2), so check
+    # them against that scene only - bedside_dresser has no doors to name.
+    if key == "full_l_kitchen":
+        check_note(baked_names)
 
     # Every shelf row owns one socket, doors own theirs on top, and each drawer
     # mesh owns one collision socket.
