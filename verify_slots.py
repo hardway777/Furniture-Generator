@@ -514,6 +514,19 @@ def run(key, baseline_dir):
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out_dir, key + ".blend"))
     assert bpy.ops.kitchen.bake_export() == {'FINISHED'}, "bake " + key
 
+    # RowName is a plan index, not an id: bake.py builds it as
+    # f"{base}_Z{i:02d}" over enumerate(plan, start=1), so it is stable only
+    # for a model that did not change. What the engine actually needs is the
+    # narrower promise - re-baking the SAME model yields the same rows - and
+    # socket names alone cannot show it: a row could move from the drawer to
+    # the compartment behind the door while every socket kept its name. So
+    # the tables themselves are captured here and compared after the re-bake.
+    table_paths = [os.path.join(out_dir, BAKE + n)
+                   for n in ("_shelves.csv", "_drawers.csv", "_doors.csv")]
+    for p in table_paths:
+        assert os.path.isfile(p), "bake did not write " + p
+    first_tables = [open(p, "rb").read() for p in table_paths]
+
     # Bake twice. The purge can no longer reach a socket by name prefix, because
     # sockets are named for who they are FOR and not for the mesh they hang off;
     # it reaches them through parenthood instead. If that ever misses one, this
@@ -530,6 +543,10 @@ def run(key, baseline_dir):
         % (once, twice)
     renamed = [n for n in twice if "." in n.rsplit("_", 1)[-1]]
     assert not renamed, "Blender renamed the new sockets: %r" % renamed
+    for p, before_bytes in zip(table_paths, first_tables):
+        assert open(p, "rb").read() == before_bytes, \
+            "a re-bake is not a no-op on tables: %s changed" % os.path.basename(p)
+    print("  re-bake: sockets and tables byte-identical (RowName stable)")
 
     fbx_path = os.path.join(fbx_dir, BAKE + ".fbx")
     assert bpy.ops.kitchen.export_fbx(filepath=fbx_path) == {'FINISHED'}, "export " + key
