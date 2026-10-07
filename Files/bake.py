@@ -55,10 +55,14 @@ Identical doors/drawers (same local geometry incl. handle, same materials)
 are baked once; a hash of the geometry is stored on the object (bake_hash)
 and the report file lists which sockets each unique mesh serves.
 
-Alongside the report, three engine-facing tables are written (see export_tables):
+Alongside the report, four engine-facing tables are written (see export_tables):
 
   <bake>_doors.csv    one row per door: socket, mesh, panel size, socket
                       transform - a UE DataTable straight from the file
+  <bake>_drawers.csv  the same for one drawer INSTANCE: the mount socket it
+                      hangs on and the unique mesh that socket serves, so a
+                      shelves row can name the asset its component is built
+                      from without anyone parsing prose
   <bake>_drawers.txt  how far each drawer can travel out of its carcass
   <bake>_shelves.csv  one row per storage slot: an invisible box around one
                       functional compartment, the join key to the opening that
@@ -703,16 +707,20 @@ def bake_kitchen(props, scene):
     text += f"\nКоллекция '{coll.name}' скрыта в вьюпорте - глаз в аутлайнере вернёт её."
     report_path = None
     doors_csv_path = None
+    drawers_csv_path = None
     drawers_txt_path = None
     shelves_csv_path = None
     blend = bpy.data.filepath
     if blend:
         # The engine tables live next to the report, so one bake drops every
         # text output of this name in one place.
-        doors_csv_path, drawers_txt_path, shelves_csv_path = write_tables(
-            os.path.dirname(blend), bake, door_rows, drawer_rows, shelf_rows)
+        doors_csv_path, drawers_csv_path, drawers_txt_path, shelves_csv_path = \
+            write_tables(os.path.dirname(blend), bake, door_rows, drawer_rows,
+                         shelf_rows)
         if doors_csv_path:
             text += f"\nДвери (CSV): {os.path.basename(doors_csv_path)}\n"
+        if drawers_csv_path:
+            text += f"Ящики (CSV): {os.path.basename(drawers_csv_path)}\n"
         if drawers_txt_path:
             text += f"Ящики (TXT): {os.path.basename(drawers_txt_path)}\n"
         if shelves_csv_path:

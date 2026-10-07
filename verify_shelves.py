@@ -42,7 +42,7 @@ import Files as fg
 fg.register()
 from Files import debug_scenes as ds
 from Files.core import SHELF_PLAN_KEY
-from Files.export_tables import _SHELVES_HEADER, write_tables
+from Files.export_tables import _DRAWERS_HEADER, _SHELVES_HEADER, write_tables
 from Files.sections import COUNTERTOP_SLOT_H
 
 SCENES = ("full_l_kitchen", "wardrobe_column", "corner_45")
@@ -364,11 +364,20 @@ def check_no_slots():
     print("\n=== no slots ===", flush=True)
     empty_dir = os.path.join(OUT, "noslots")
     os.makedirs(empty_dir, exist_ok=True)
-    _csv, _txt, shelves_path = write_tables(empty_dir, "EMPTY", [], [], [])
+    _csv, drawers_csv, _txt, shelves_path = write_tables(
+        empty_dir, "EMPTY", [], [], [])
     assert shelves_path and os.path.isfile(shelves_path), "empty list wrote no file"
     lines = open(shelves_path, encoding="utf-8").read().splitlines()
     assert lines == [",".join(_SHELVES_HEADER)], "expected header only, got %r" % (lines,)
     print("  writer: header only, file present")
+    # The same rule for the drawers table: a model with no drawer says so by
+    # having no row, not by having no file - otherwise "no drawers" and "the
+    # write failed" read identically to the importer.
+    assert drawers_csv and os.path.isfile(drawers_csv), "no drawers CSV written"
+    dlines = open(drawers_csv, encoding="utf-8").read().splitlines()
+    assert dlines == [",".join(_DRAWERS_HEADER)], \
+        "expected drawers header only, got %r" % (dlines,)
+    print("  writer: drawers header only, file present")
 
     clear_scene()
     props = bpy.context.scene.kitchen_props

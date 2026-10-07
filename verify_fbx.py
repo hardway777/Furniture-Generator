@@ -47,7 +47,7 @@ from Files import debug_scenes as ds
 
 OUT = os.path.join(ROOT, ".agent_tmp", "fbx_out")
 SCENES = ("full_l_kitchen", "bedside_dresser")
-TABLES = ("_doors.csv", "_drawers.txt", "_shelves.csv")
+TABLES = ("_doors.csv", "_drawers.txt", "_drawers.csv", "_shelves.csv")
 
 
 def parse_csv(path):

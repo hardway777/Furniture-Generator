@@ -48,6 +48,11 @@ Asserted:
   * every concrete socket name written in NOTE_FOR_KODA.MD is one the bake
     actually makes - the note is what the engine side codes against, so an
     example that is not in the file is worse than no example;
+  * a drawers.csv is written and every Type=drawer row of _shelves.csv
+    resolves into it - the mesh a drawer component is built from has to be
+    machine-readable, not a field of prose in _drawers.txt, and nothing may
+    dangle in either direction (no row pointing at prose, no CSV row nobody
+    wants, no disagreement with the human file about which drawers exist);
   * with --baseline: the tables and the bake report may differ ONLY in socket
     names - everything else (mesh list, dimensions, transforms, materials) is
     compared with socket names masked out, so a real change still fails.
@@ -70,7 +75,7 @@ import Files as fg
 fg.register()
 from Files import debug_scenes as ds
 from Files.core import SHELF_PLAN_KEY
-from Files.export_tables import _SHELVES_HEADER
+from Files.export_tables import _DRAWERS_HEADER, _SHELVES_HEADER
 
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 BASELINE = None
@@ -164,6 +169,19 @@ def check_baseline(base_dir, fbx_dir, out_dir):
     for name in (BAKE + "_doors.csv", BAKE + "_drawers.txt"):
         assert_only_socket_names_changed(
             name, os.path.join(base_dir, name), os.path.join(fbx_dir, name))
+    # _drawers.csv postdates this snapshot, so there is nothing to compare it
+    # against yet - but the moment the baseline is refreshed it must come under
+    # the same rule. Testing for the OLD file rather than remembering to edit
+    # this list is what makes that happen: a missing file means "not covered",
+    # an expired condition would have meant "silently skipped forever".
+    name = BAKE + "_drawers.csv"
+    if os.path.isfile(os.path.join(base_dir, name)):
+        assert_only_socket_names_changed(
+            name, os.path.join(base_dir, name), os.path.join(fbx_dir, name))
+        print("  baseline: %s compared" % name)
+    else:
+        print("  baseline: %s predates this file, checked structurally instead"
+              % name)
     assert_only_socket_names_changed(
         "the bake report's mesh section",
         os.path.join(base_dir, BAKE + "_bake_report.txt"),
@@ -332,6 +350,80 @@ def check_table(shelves_path, door_path, baked, objects, baseline_dir):
     return rows, len(door_rows), drawer_meshes
 
 
+def check_drawers_csv(path, txt_path, rows, objects):
+    """A drawer row must be able to name its mesh without reading prose.
+
+    The engine enumerates compartments from _shelves.csv, and a drawer row
+    there carries the mount socket but not the asset the component is built
+    from. Until now the only file that said which mesh was _drawers.txt - a
+    human document whose wording is free to move, and which a machine reader
+    would have to parse.
+
+    The fix is a CSV twin of the doors table rather than a column on the
+    shelves header, and both halves of that choice are measured, not
+    assumed: the shelves table ALREADY reaches across files for its door
+    (DoorSocket joins into doors.csv on five rows of full_l_kitchen), so a
+    second join of exactly that shape leaves a drawer row no more
+    self-contained than a closed one instead of making it a special case;
+    and the shelves header is fixed by contract to have SlotSocket as its
+    only added column, which a DrawerMesh column would break outright.
+
+    What has to hold is that nothing dangles in either direction: every
+    shelves drawer row resolves to a mesh, every drawers.csv row is wanted
+    by one, and the human file agrees about which drawers exist at all.
+    """
+    assert os.path.isfile(path), "no drawers CSV (Q6 unanswered): " + path
+    header, drows = read_csv(path)
+    assert header == list(_DRAWERS_HEADER), \
+        "drawers header is not _DRAWERS_HEADER: %r" % (header,)
+
+    # The doors table's own invariant, mirrored: RowName is the socket, so a
+    # row is a valid DataTable row and the join key appears twice on purpose.
+    for d in drows:
+        assert d["RowName"] == d["Socket"], \
+            "drawers row %s breaks RowName == Socket" % d["RowName"]
+    sockets = [d["Socket"] for d in drows]
+    assert len(set(sockets)) == len(sockets), "duplicate sockets in drawers.csv"
+
+    by_socket = {d["Socket"]: d for d in drows}
+    meshes = {o.name for o in objects if o.type == "MESH"}
+    wanted = set()
+    for r in rows:
+        if r["Type"] != "drawer":
+            continue
+        assert r["DoorSocket"], "drawer row %s lost its mount socket" % r["RowName"]
+        d = by_socket.get(r["DoorSocket"])
+        assert d is not None, \
+            "drawer row %s points %s at nothing machine-readable - its mesh " \
+            "exists only in prose" % (r["RowName"], r["DoorSocket"])
+        assert d["Mesh"] in meshes, \
+            "drawers.csv promises mesh %s, which was never baked" % d["Mesh"]
+        assert d["Body"] == r["Body"], \
+            "%s sits on %s in shelves.csv but %s in drawers.csv" % (
+                r["RowName"], r["Body"], d["Body"])
+        # Both files format Depth to four places from the same travel value,
+        # so string equality is exact: a mismatch means they stopped being
+        # computed the same way rather than rounded differently.
+        assert d["Depth"] == r["Depth"], \
+            "%s Depth %r in drawers.csv, %r in shelves.csv" % (
+                r["RowName"], d["Depth"], r["Depth"])
+        wanted.add(r["DoorSocket"])
+
+    orphans = sorted(set(sockets) - wanted)
+    assert not orphans, \
+        "drawers.csv describes drawers no shelf row wants: %r" % orphans
+
+    # The human file and the machine one are written in the same pass, so
+    # they cannot drift by accident - only by someone rewording one of them.
+    txt = io.open(txt_path, encoding="utf-8").read()
+    unmentioned = sorted(s for s in sockets if s not in txt)
+    assert not unmentioned, \
+        "_drawers.txt no longer mentions %r" % unmentioned
+
+    print("  drawers.csv: %d rows, %d resolved from shelves, all meshes real"
+          % (len(drows), len(wanted)))
+
+
 def check_roundtrip(key, rows, fbx_path, yaw_by_section, baked_names):
     """Export -> wipe -> import, then read the sockets back out of the file."""
     assert os.path.isfile(fbx_path), "no FBX: " + fbx_path
@@ -461,6 +553,10 @@ def run(key, baseline_dir):
     rows, door_count, drawer_meshes = check_table(
         shelves_path, os.path.join(fbx_dir, BAKE + "_doors.csv"),
         baked, objects, base_dir)
+    check_drawers_csv(
+        os.path.join(fbx_dir, BAKE + "_drawers.csv"),
+        os.path.join(fbx_dir, BAKE + "_drawers.txt"),
+        rows, objects)
 
     if base_dir:
         check_baseline(base_dir, fbx_dir, out_dir)

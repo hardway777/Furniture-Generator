@@ -1,12 +1,18 @@
 """export_tables - Engine-facing tables for the moving parts of a bake.
 
-Three files are written next to the bake report, all keyed by the bake name:
+Four files are written next to the bake report, all keyed by the bake name:
 
   <bake>_doors.csv    one row per door instance: the socket it hangs on, the
                       unique mesh that socket serves, the panel dimensions and
                       the socket transform rebased into its body - ready for a
                       UE DataTable import (RowName = the socket name, unique
                       per row);
+  <bake>_drawers.csv  the same record for a drawer, without the hinge and with
+                      the travel instead: one row per drawer INSTANCE, so three
+                      rows may name one Mesh. That is the point of it - a
+                      shelves row already carries the mount socket and still
+                      cannot say what to put there, and the TXT below is prose
+                      nobody should have to parse to learn which asset it is;
   <bake>_drawers.txt  a readable list of how far every drawer can travel;
   <bake>_shelves.csv  one row per storage SLOT: one invisible box per
                       functional compartment - the whole niche behind its
@@ -83,14 +89,20 @@ def door_entry(source, socket_name, mesh_name, body_name, socket_matrix):
 
 
 def drawer_entry(source, socket_name, mesh_name, body_name):
-    """One TXT record for a drawer, measured in the drawer's own frame.
+    """One record for a drawer, measured in the drawer's own frame.
 
     The mesh is front plate + tray, so its x/z spans are the facade and its
     max-y is the tray depth the travel stops at (see module docstring).
+
+    One entry per drawer INSTANCE, not per unique mesh: the bake already
+    deduplicates identical drawers into a single Mesh, and this record is
+    what lets the engine tell those instances apart - the socket is theirs,
+    the mesh is shared. RowName is the socket, mirroring the doors table.
     """
     lo, hi = _local_bbox(source)
     travel = max(0.0, hi[1])
     return {
+        "row_name": socket_name,
         "source": source.name,
         "socket": socket_name,
         "mesh": mesh_name,
@@ -105,6 +117,19 @@ def drawer_entry(source, socket_name, mesh_name, body_name):
 _CSV_HEADER = ("RowName", "Source", "Body", "Socket", "Mesh", "Hinge",
                "Width", "Height", "Thickness",
                "SocketX", "SocketY", "SocketZ", "SocketYawDeg")
+
+# One row per drawer INSTANCE - three of them may name the same Mesh, which is
+# the whole reason this file exists: the shelves table's drawer row has the
+# mount socket and no asset to build from, and _drawers.txt is prose.
+#
+# The first five columns are the doors table's first five, in the same order,
+# so both can be read as "moving part" tables and joined the same way -
+# _shelves.csv DoorSocket resolves into Socket in either of them. Width and
+# Height are the facade; Depth is the travel, byte-identical to the Depth
+# column of the shelves row that joins here (the two are written from one
+# number so they cannot disagree).
+_DRAWERS_HEADER = ("RowName", "Source", "Body", "Socket", "Mesh",
+                   "Width", "Height", "Depth")
 
 # Storage slots. Ext* is the whole compartment box; Clear* repeats it, because
 # the engine builds its containment collider from these boxes and "which shelf
@@ -187,6 +212,18 @@ def shelf_entry(row_name, section, body, slot_type, door_socket, slot_socket,
     }
 
 
+def _write_drawers_csv(path, entries):
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(_DRAWERS_HEADER)
+        for d in entries:
+            writer.writerow([
+                d["row_name"], d["source"], d["body"], d["socket"], d["mesh"],
+                f"{d['front_w']:.4f}", f"{d['front_h']:.4f}",
+                f"{d['travel']:.4f}",
+            ])
+
+
 def _write_shelves_csv(path, entries):
     with open(path, "w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh)
@@ -223,7 +260,8 @@ def _drawers_text(bake, entries):
 
 
 def write_tables(directory, bake, door_entries, drawer_entries, shelf_entries=None):
-    """Write the three tables into `directory`; returns (csv, txt, shelves_csv).
+    """Write the four tables into `directory`; returns
+    (doors_csv, drawers_csv, drawers_txt, shelves_csv).
 
     A failure of any write is a warning, not a failed bake: the meshes and
     sockets are already complete, and the same rule the bake report follows
@@ -231,9 +269,12 @@ def write_tables(directory, bake, door_entries, drawer_entries, shelf_entries=No
 
     A model with no storage slot at all still gets a shelves CSV with just its
     header: the engine side reads the file unconditionally, and "no slots" is a
-    different answer from "no file".
+    different answer from "no file". The drawers CSV is header-only for the
+    same reason - a model with no drawer says so by having no row, not by
+    having no file.
     """
     csv_path = os.path.join(directory, f"{bake}_doors.csv")
+    drawers_csv_path = os.path.join(directory, f"{bake}_drawers.csv")
     txt_path = os.path.join(directory, f"{bake}_drawers.txt")
     shelves_path = os.path.join(directory, f"{bake}_shelves.csv")
     try:
@@ -241,6 +282,11 @@ def write_tables(directory, bake, door_entries, drawer_entries, shelf_entries=No
     except OSError as exc:
         warn(f"bake: could not write the doors CSV: {exc}")
         csv_path = None
+    try:
+        _write_drawers_csv(drawers_csv_path, drawer_entries)
+    except OSError as exc:
+        warn(f"bake: could not write the drawers CSV: {exc}")
+        drawers_csv_path = None
     try:
         with open(txt_path, "w", encoding="utf-8") as fh:
             fh.write(_drawers_text(bake, drawer_entries))
@@ -252,4 +298,4 @@ def write_tables(directory, bake, door_entries, drawer_entries, shelf_entries=No
     except OSError as exc:
         warn(f"bake: could not write the shelves CSV: {exc}")
         shelves_path = None
-    return csv_path, txt_path, shelves_path
+    return csv_path, drawers_csv_path, txt_path, shelves_path

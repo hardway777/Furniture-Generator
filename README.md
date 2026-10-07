@@ -56,7 +56,7 @@ Files/                          # Main add-on package
 ├── solver.py                   # Parameter solver for cabinet sizing
 ├── debug_scenes.py             # Debug presets and scenario loader
 ├── bake.py                     # UE export / bake pipeline
-├── export_tables.py            # Doors CSV / drawers TXT engine tables
+├── export_tables.py            # Doors / drawers / shelves engine tables
 ├── blender_manifest.toml       # Add-on manifest and version
 ├── gpl-3.0.txt                 # License file
 └── textures/                   # User PBR texture sets
@@ -104,6 +104,10 @@ The output includes:
 - A generated report file describing the bake results
 - `<bake>_doors.csv` with every door, the socket it hangs on, its panel size
   and socket transform — import it directly as a UE DataTable
+- `<bake>_drawers.csv` with one row per drawer INSTANCE: the socket it mounts
+  on, the mesh to build it from, the facade size and the travel. Three
+  identical drawers are three rows sharing one mesh — one asset, three
+  instances. Also a UE DataTable
 - `<bake>_drawers.txt` listing the maximum travel of each drawer
 - `<bake>_shelves.csv` with one row per storage slot — one invisible box per
   functional compartment: the whole niche behind its doors, one single drawer,
@@ -122,7 +126,7 @@ The output includes:
 
 The `Export FBX & Tables` button sits directly under `Bake for Export`. It
 runs the same bake, then writes `<name>.fbx` into the folder you pick with
-the three tables beside it — so a model and the tables describing it leave
+the four table files beside it — so a model and the tables describing it leave
 the machine as one unit instead of two.
 
 The FBX is written from the `BAKE_` collection with its `SOCKET_` empties in
