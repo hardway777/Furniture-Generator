@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Headless check of the per-compartment slot sockets.
+"""Headless check of the per-compartment sockets and the drawer sockets.
 
 Run from a Blender binary:
 
@@ -7,34 +7,42 @@ Run from a Blender binary:
       --baseline .agent_tmp/slot_base
 
 Written before bake.py was touched, so it fails until the feature exists and
-stays honest afterwards. Two claims from the task were measured rather than
-trusted:
+stays honest afterwards.
 
-  * every planned carcass in both scenes carries a PURE rotation about Z
-    (euler x=y=0, scale 1, determinant +1), with the turned sections of the
-    L row at -90 deg - so "yaw only" is the section's own euler z and nothing
-    else has to be flattened;
-  * the bake frames are Matrix.Translation all the way through (_back_pivot),
-    so a socket's world rotation is its rotation in the body frame with no
-    re-basing to undo.
+Naming, as agreed - SOCKET_<for-whom>_<NN>:
 
-What is asserted:
+  Door<NN>         for the unique door mesh SM_<bake>_Door_<NN>
+  Drawer<NN>       for the unique drawer mesh SM_<bake>_Drawer_<NN>
+  DrawerCol<NN>    for the collision component of that same drawer mesh
+  <RowName>        for the compartment that row describes
 
-  * the header gained exactly one column, SlotSocket, at index 5, and is the
-    old header with that name inserted - nothing else moved;
-  * every row carries a slot socket; a drawer row reuses its drawer's own
-    socket instead of minting a second one; a closed row's slot socket is not
-    its door socket;
-  * the sockets form one running per-body counter with no gaps, and slot
-    sockets never reuse a door/drawer number on the same body;
-  * every socket is a child of a MESH - FindMeshSockets only walks the mesh's
-    own node subtree, so a sibling empty is silently dropped by the importer;
-  * round-tripped through FBX, each socket is present under exactly its
-    SlotSocket name, sits on the row's LocX/Y/Z within 1e-3 m, and carries
-    the yaw of the section that owns it - the -90 deg corner rows included;
-  * with --baseline: _doors.csv and _drawers.txt are byte-identical and the
-    mesh section of the bake report (everything before "Слоты хранения") is
-    unchanged, so the mesh part of the artifact did not move.
+<NN> is still one running counter per parent mesh - doors and drawers take it
+first, compartment sockets continue past them, so a number is never worn
+twice. Only the owner text changed: it says who the socket is FOR, not which
+mesh it hangs off, because the scene hierarchy already answers whose it is.
+
+Asserted:
+
+  * every socket parses as SOCKET_<owner>_<NN> and its owner says what it is
+    for; the owner of a collision socket carries the index of the drawer mesh
+    it sits on, and a compartment socket's owner is a real RowName;
+  * classification comes from the HIERARCHY, not from the name: a socket whose
+    parent is a drawer mesh is a collision socket, a socket whose parent is a
+    body is either a door/drawer mount or a compartment socket;
+  * one running counter per body with no gaps or repeats, and compartment
+    sockets never restart at 01 or wear a door number;
+  * a drawer row's SlotSocket is the collision socket on the drawer mesh - a
+    different socket from its mount (DoorSocket) - and with the drawer closed
+    it lands on the row's LocX/Y/Z within 1e-3 m, which is what makes it a
+    compartment centre rather than an arbitrary point;
+  * round-tripped through FBX: the socket is present under exactly its
+    SlotSocket name, parented to a MESH (FindMeshSockets only walks the mesh's
+    own subtree, so a sibling is dropped without a word), and a compartment
+    socket carries the yaw of the section that owns it - the -90 deg corner
+    rows included;
+  * with --baseline: the tables and the bake report may differ ONLY in socket
+    names - everything else (mesh list, dimensions, transforms, materials) is
+    compared with socket names masked out, so a real change still fails.
 
 Scene sizes are printed rather than hard-coded: they are the report the
 engine side asked for, and a change in them is something a human should read.
@@ -65,6 +73,14 @@ OUT = os.path.join(ROOT, ".agent_tmp", "slot_out")
 BAKE = "SLOTSLOT"
 SCENES = ("bedside_dresser", "full_l_kitchen")
 TOL = 1e-3
+
+# SOCKET_<owner>_NN, where owner itself may contain underscores.
+NAME_RE = re.compile(r"^SOCKET_(.+)_(\d{2})$")
+MOUNT_OWNER_RE = re.compile(r"^(Door|Drawer)(\d{2})$")
+COL_OWNER_RE = re.compile(r"^DrawerCol(\d{2})$")
+DRAWER_MESH_RE = re.compile(r"^SM_%s_Drawer_(\d{2})$" % BAKE)
+# Everything that is a socket name, for masking before a baseline diff.
+SOCKET_TOKEN_RE = re.compile(r"SOCKET_\S+")
 
 
 def clear_scene():
@@ -106,14 +122,49 @@ def ang_close(a, b, tol=1e-3):
     return abs((a - b + math.pi) % (2.0 * math.pi) - math.pi) <= tol
 
 
-def nn_of(socket_name):
-    m = re.search(r"_(\d+)$", socket_name)
-    assert m, "socket has no trailing _NN: " + socket_name
-    return int(m.group(1))
+def split_socket(name):
+    """(owner, NN) - owner is everything between SOCKET_ and the trailing _NN."""
+    m = NAME_RE.match(name)
+    assert m, "socket name is not SOCKET_<owner>_NN: " + name
+    return m.group(1), int(m.group(2))
 
 
-def check_table(shelves_path, door_path, baked_sockets, baseline_dir):
-    """Header, SlotSocket semantics, counters. Returns (rows, door_count)."""
+def nn_of(name):
+    return split_socket(name)[1]
+
+
+def mask(text):
+    """Socket names redacted, so a baseline diff sees only what else moved."""
+    return SOCKET_TOKEN_RE.sub("SOCKET_", text)
+
+
+def assert_only_socket_names_changed(label, old_path, new_path, transform=mask):
+    with open(old_path, "rb") as fh:
+        old = fh.read()
+    with open(new_path, "rb") as fh:
+        new = fh.read()
+    try:
+        old_t = transform(old.decode("utf-8"))
+        new_t = transform(new.decode("utf-8"))
+    except UnicodeDecodeError:
+        old_t, new_t = old, new
+    assert old_t == new_t, label + " changed in more than its socket names"
+
+
+def check_baseline(base_dir, fbx_dir, out_dir):
+    """The artifact may move only where a socket name is written down."""
+    for name in (BAKE + "_doors.csv", BAKE + "_drawers.txt"):
+        assert_only_socket_names_changed(
+            name, os.path.join(base_dir, name), os.path.join(fbx_dir, name))
+    assert_only_socket_names_changed(
+        "the bake report's mesh section",
+        os.path.join(base_dir, BAKE + "_bake_report.txt"),
+        os.path.join(out_dir, BAKE + "_bake_report.txt"),
+        transform=lambda t: mask(mesh_section(t)))
+
+
+def check_table(shelves_path, door_path, baked, baseline_dir):
+    """Header, SocketSocket semantics, counters. Returns (rows, door_count)."""
     header, rows = read_csv(shelves_path)
     assert header == list(_SHELVES_HEADER), \
         "header is not _SHELVES_HEADER: %r" % (header,)
@@ -126,78 +177,122 @@ def check_table(shelves_path, door_path, baked_sockets, baseline_dir):
             "header must be the old one with SlotSocket inserted:\n  was %r\n  now %r" \
             % (expected, header)
 
-        for name in (BAKE + "_doors.csv", BAKE + "_drawers.txt"):
-            with open(os.path.join(baseline_dir, name), "rb") as fh:
-                old = fh.read()
-            with open(os.path.join(os.path.dirname(door_path), name), "rb") as fh:
-                new = fh.read()
-            assert old == new, name + " changed byte-for-byte"
-
     _, door_rows = read_csv(door_path)
     door_sockets = {r["Socket"] for r in door_rows}
+    row_names = {r["RowName"] for r in rows}
+
+    # Every name in the table is a name the bake actually made.
+    by_name = {o.name: o for o in baked}
+    for r in rows:
+        assert r["SlotSocket"], "row %s has no SlotSocket" % r["RowName"]
+        assert r["SlotSocket"] in by_name, \
+            "table promises a socket that was never built: " + r["SlotSocket"]
+        if r["DoorSocket"]:
+            assert r["DoorSocket"] in by_name, \
+                "table promises a door socket that was never built: " + r["DoorSocket"]
 
     slot_sockets = []
     for r in rows:
         name = r["SlotSocket"]
-        assert name, "row %s has no SlotSocket" % r["RowName"]
-        assert name.startswith("SOCKET_") and re.search(r"_\d{2}$", name), \
-            "bad socket name %r" % name
+        owner, _ = split_socket(name)
+        sock = by_name[name]
+        parent = sock.parent.name if sock.parent else None
+        assert parent, "%s has no parent" % name
+        is_mesh = sock.parent.type == "MESH"
+        assert is_mesh, "%s is not a child of a mesh (parent=%r)" % (name, parent)
+
         if r["Type"] == "drawer":
-            assert r["DoorSocket"], "drawer row %s lost its drawer socket" % r["RowName"]
-            assert name == r["DoorSocket"], \
-                "drawer row %s minted a second socket: %s" % (r["RowName"], name)
+            # The compartment component lives on the drawer, so it must ride
+            # the drawer mesh - not the mount socket, which stays on the body
+            # and would not follow the drawer out.
+            assert r["DoorSocket"], "drawer row %s lost its mount socket" % r["RowName"]
+            assert name != r["DoorSocket"], \
+                "drawer row %s still points its compartment at the mount socket" % r["RowName"]
+            m = COL_OWNER_RE.match(owner)
+            assert m, "drawer row %s SlotSocket owner is %r, want DrawerCol<NN>" % (
+                r["RowName"], owner)
+            dm = DRAWER_MESH_RE.match(parent)
+            assert dm, "collision socket %s sits on %r, not a drawer mesh" % (name, parent)
         else:
             assert name not in door_sockets, \
                 "slot socket %s reuses a door socket" % name
-            if r["DoorSocket"]:
-                assert name != r["DoorSocket"], \
-                    "closed row %s points its compartment at the door socket" % r["RowName"]
+            assert owner in row_names, \
+                "compartment socket %s names %r, which is no RowName" % (name, owner)
         slot_sockets.append(name)
 
-    assert len(set(slot_sockets)) == len(slot_sockets), "duplicate slot sockets"
+    # A compartment socket is one per row - except drawers, which all hang on
+    # the one shared drawer mesh and therefore share its collision socket.
+    unique_slots = [n for n, r in zip(slot_sockets, rows) if r["Type"] != "drawer"]
+    assert len(set(unique_slots)) == len(unique_slots), "duplicate compartment sockets"
 
-    # Every socket the table promises must be an object the bake actually made.
-    baked_names = {o.name for o in baked_sockets}
-    for name in slot_sockets:
-        assert name in baked_names, "table promises a socket that was never built: " + name
+    # Classification by hierarchy: whose socket it is is a scene fact, and the
+    # name only has to agree with it.
+    bodies = {r["Body"] for r in rows} | {r["Body"] for r in door_rows}
+    drawer_meshes = sorted(o.name for o in baked
+                           if o.type == "MESH" and DRAWER_MESH_RE.match(o.name))
+    on_body = []
+    for o in baked:
+        parent = o.parent.name if o.parent else None
+        assert parent, "%s is a root socket" % o.name
+        if parent in drawer_meshes or parent in bodies:
+            on_body.append(parent)
+        else:
+            raise AssertionError("%s hangs on unexpected parent %r" % (o.name, parent))
 
-    # Classify the real objects instead of parsing names blind: a door/drawer
-    # socket is SOCKET_<body>_NN, so stripping the trailing number lands on a
-    # body the tables know about, while a compartment socket still has the row
-    # name left over and lands on nothing.
-    known_bodies = {r["Body"] for r in rows} | {r["Body"] for r in door_rows}
-    pre = {}
-    for o in baked_sockets:
-        body = re.sub(r"_\d{2}$", "", o.name[len("SOCKET_"):])
-        if body in known_bodies:
-            pre.setdefault(body, []).append(nn_of(o.name))
-    slots = {}
+    # Nothing on a mesh is numbered twice, and the compartment run starts past
+    # the door/drawer run rather than restarting at 01.
+    moving, slots = {}, {}
     for r in rows:
-        # A drawer row reuses the drawer's socket, which the object scan above
-        # already counted as pre-existing - putting it here would report the
-        # drawer's own number as a clash with itself.
         if r["Type"] == "drawer":
             continue
         slots.setdefault(r["Body"], []).append(nn_of(r["SlotSocket"]))
+    for o in baked:
+        owner, nn = split_socket(o.name)
+        if o.parent and o.parent.name in drawer_meshes:
+            continue
+        if MOUNT_OWNER_RE.match(owner) or o.name in door_sockets:
+            moving.setdefault(o.parent.name, []).append(nn)
 
-    # Nothing on a body is numbered twice - a counter restarted at 01 would
-    # show up here as a clash with the door/drawer socket already using it.
-    for body in sorted(set(pre) | set(slots)):
-        a, b = pre.get(body, []), slots.get(body, [])
-        assert len(set(a)) == len(a), "%s has two door sockets numbered alike" % body
-        assert len(set(b)) == len(b), "%s has two compartment sockets numbered alike" % body
+    for parent in sorted(set(on_body) | set(slots)):
+        a_all, b_all = moving.get(parent, []), slots.get(parent, [])
+        a, b = sorted(set(a_all)), sorted(set(b_all))
+        assert len(a) == len(a_all), "%s has two mount sockets numbered alike" % parent
+        assert len(b) == len(b_all), \
+            "%s has two compartment sockets numbered alike" % parent
         clash = sorted(set(a) & set(b))
-        assert not clash, "%s gives a compartment socket a door number: %r" % (body, clash)
-        # And the compartment run starts past the door/drawer run, never at 01.
+        assert not clash, "%s gives a compartment socket a mount number: %r" % (parent, clash)
         if a and b:
             assert min(b) > max(a), \
-                "%s compartment sockets restart the counter: doors/drawers %r, slots %r" \
-                % (body, sorted(a), sorted(b))
+                "%s compartment sockets restart the counter: mounts %r, slots %r" \
+                % (parent, a, b)
 
-    return rows, len(door_rows)
+    # One collision socket per drawer mesh, named for that mesh.
+    for mesh in drawer_meshes:
+        idx = DRAWER_MESH_RE.match(mesh).group(1)
+        owners = sorted({split_socket(n)[0] for n in
+                         (o.name for o in baked if o.parent is by_name.get(mesh))})
+        want = "DrawerCol" + idx
+        assert owners == [want], \
+            "%s carries %r, want exactly [%r]" % (mesh, owners, want)
+
+    # Every drawer row's compartment socket lands on its own Loc once the
+    # drawer is closed - that is the whole claim about "the centre".
+    for r in rows:
+        if r["Type"] != "drawer":
+            continue
+        mount = by_name[r["DoorSocket"]]
+        trig = by_name[r["SlotSocket"]]
+        want = (float(r["LocX"]), float(r["LocY"]), float(r["LocZ"]))
+        got = (mount.matrix_world @ trig.matrix_world).translation
+        delta = max(abs(got[i] - want[i]) for i in range(3))
+        assert delta <= TOL, \
+            "%s trigger off by %.6f m once closed: %r vs %r" % (
+                r["RowName"], delta, tuple(round(v, 4) for v in got), want)
+
+    return rows, len(door_rows), drawer_meshes
 
 
-def check_roundtrip(key, rows, fbx_path, yaw_by_section):
+def check_roundtrip(key, rows, fbx_path, yaw_by_section, baked_names):
     """Export -> wipe -> import, then read the sockets back out of the file."""
     assert os.path.isfile(fbx_path), "no FBX: " + fbx_path
     assert os.path.getsize(fbx_path) > 10000, "FBX implausibly small"
@@ -217,16 +312,21 @@ def check_roundtrip(key, rows, fbx_path, yaw_by_section):
             "%s is not a child of a mesh (parent=%r)" % (
                 sock.name, sock.parent.name if sock.parent else None)
 
-        # A drawer row reuses the drawer's own socket, which sits on the
-        # drawer's front-face pivot, not on the compartment centre - that is
-        # what makes requirement 2 (never mint a second socket for a drawer)
-        # collide with the blanket "position matches LocX/Y/Z" check. The
-        # specific requirement wins: relocating the drawer socket would move the
-        # placement _drawers.txt and the engine already rely on, and Loc*/Depth
-        # stay where they are by design. So a drawer row is held to presence,
-        # name and parentage only; the centre and the yaw belong to the
-        # compartment sockets the bake minted.
+        # A drawer's compartment socket rides the drawer, so its position in
+        # the file is relative to that mesh, not to the body: what has to hold
+        # is that closing the drawer puts it back on the row's Loc.
         if r["Type"] == "drawer":
+            mount = imported.get(r["DoorSocket"])
+            assert mount is not None, "mount %s missing from the FBX" % r["DoorSocket"]
+            assert mount.parent.name == r["Body"], \
+                "mount %s hangs on %r, want %r" % (
+                    r["DoorSocket"], mount.parent.name, r["Body"])
+            want = (float(r["LocX"]), float(r["LocY"]), float(r["LocZ"]))
+            got = (mount.matrix_world @ sock.matrix_world).translation
+            delta = max(abs(got[i] - want[i]) for i in range(3))
+            assert delta <= TOL, \
+                "%s closed-drawer trigger off by %.6f m: %r vs %r" % (
+                    r["RowName"], delta, tuple(round(v, 4) for v in got), want)
             continue
 
         want = (float(r["LocX"]), float(r["LocY"]), float(r["LocZ"]))
@@ -250,6 +350,8 @@ def check_roundtrip(key, rows, fbx_path, yaw_by_section):
                 print("    yaw %-9s %-32s %7.2f deg (section %s)"
                       % (r["RowName"], sock.name, math.degrees(got_yaw), section))
 
+    missing = sorted(set(baked_names) - set(imported))
+    assert not missing, "sockets lost in the round trip: %r" % missing
     return len(imported)
 
 
@@ -286,54 +388,51 @@ def run(key, baseline_dir):
     # Sockets as Blender has them, before the file is round-tripped.
     coll = bpy.data.collections.get("BAKE_" + BAKE)
     assert coll is not None, "no BAKE collection"
-    baked_sockets = [o for o in coll.all_objects
-                     if o.type == 'EMPTY' and o.name.startswith("SOCKET_")]
+    baked = [o for o in coll.all_objects
+             if o.type == 'EMPTY' and o.name.startswith("SOCKET_")]
     # Names only from here on: the round trip wipes the scene, and a StructRNA
     # of a removed object cannot be read afterwards.
-    baked_names = sorted((o.name for o in baked_sockets))
+    baked_names = sorted((o.name for o in baked))
 
     shelves_path = os.path.join(fbx_dir, BAKE + "_shelves.csv")
     base_dir = os.path.join(baseline_dir, key) if baseline_dir else None
-    rows, door_count = check_table(shelves_path,
-                                   os.path.join(fbx_dir, BAKE + "_doors.csv"),
-                                   baked_sockets, base_dir)
+    rows, door_count, drawer_meshes = check_table(
+        shelves_path, os.path.join(fbx_dir, BAKE + "_doors.csv"), baked, base_dir)
 
     if base_dir:
-        with io.open(os.path.join(base_dir, BAKE + "_bake_report.txt"),
-                     encoding="utf-8") as fh:
-            old_report = mesh_section(fh.read())
-        with io.open(os.path.join(out_dir, BAKE + "_bake_report.txt"),
-                     encoding="utf-8") as fh:
-            new_report = mesh_section(fh.read())
-        assert old_report == new_report, "the bake report's mesh section changed"
-    # Each shelf row owns exactly one socket, and doors own theirs on top.
-    assert len(baked_sockets) == len(rows) + door_count, \
-        "expected %d sockets (rows %d + doors %d), found %d" % (
-            len(rows) + door_count, len(rows), door_count, len(baked_sockets))
+        check_baseline(base_dir, fbx_dir, out_dir)
 
-    imported = check_roundtrip(key, rows, fbx_path, yaw_by_section)
+    # Every shelf row owns one socket, doors own theirs on top, and each drawer
+    # mesh owns one collision socket.
+    expected = len(rows) + door_count + len(drawer_meshes)
+    assert len(baked) == expected, \
+        "expected %d sockets (rows %d + doors %d + drawers %d), found %d" % (
+            expected, len(rows), door_count, len(drawer_meshes), len(baked))
+
+    imported = check_roundtrip(key, rows, fbx_path, yaw_by_section, baked_names)
 
     drawers = sum(1 for r in rows if r["Type"] == "drawer")
     compartments = len(rows) - drawers
     turned = sorted(s for s, y in yaw_by_section.items()
                     if not ang_close(y, 0.0))
-    print("  counts: doors=%d drawers=%d compartments=%d sockets=%d (imported %d)"
-          % (door_count, drawers, compartments, len(baked_sockets), imported))
+    print("  counts: doors=%d drawers=%d compartments=%d drawer-meshes=%d "
+          "sockets=%d (imported %d)"
+          % (door_count, drawers, compartments, len(drawer_meshes),
+             len(baked), imported))
 
-    # The naming scheme, straight off the objects: one running counter, doors
-    # and drawers first, compartment sockets continuing past them.
-    for body in sorted({r["Body"] for r in rows}):
-        names = sorted((n for n in baked_names
-                        if n.startswith("SOCKET_" + body + "_")), key=nn_of)
-        # SOCKET_<body>_NN exactly is a door or drawer socket; anything longer
-        # carries a row name and is a compartment socket.
-        def kind(n, _body=body):
-            return ("door/drawer" if re.fullmatch(re.escape(_body) + r"_\d{2}",
-                                                  n[len("SOCKET_"):]) else "slot")
+    # The naming scheme, straight off the objects and grouped by the mesh that
+    # owns them - hierarchy first, the name only has to agree.
+    parent_of = {o.name: (o.parent.name if o.parent else None) for o in baked}
+    groups = {}
+    for n in baked_names:
+        groups.setdefault(parent_of[n], []).append(n)
+    for parent in sorted(groups):
+        names = sorted(groups[parent], key=nn_of)
+        print("  %s - %d sockets" % (parent, len(names)))
         head, tail = (names, []) if len(names) <= 7 else (names[:3], names[-3:])
-        print("  %s - %d sockets" % (body, len(names)))
         for n in head + tail:
-            print("    %-12s %s" % (kind(n), n))
+            owner, nn = split_socket(n)
+            print("    %-14s NN=%02d  %s" % (owner, nn, n))
         if tail:
             print("    ... %d in between" % (len(names) - 6))
 
