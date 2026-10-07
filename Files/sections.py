@@ -301,6 +301,21 @@ def build_wardrobe_section(
                                  dr_lift_rel, wall_h, box_depth)
 
                 drawer_world = matrix @ Matrix.Translation(Vector((col_facade_x, 0.0, dr_z)))
+                # One slot per drawer, the same record the drawer bank of a regular
+                # section writes: the cavity of THIS tray alone, in the section
+                # frame, x inset past the tray walls and z starting on the tray
+                # floor - exactly the volume drawer_collider_boxes leaves empty.
+                # Without it this drawer has a mount socket in _drawers.csv and
+                # nothing in _shelves.csv to join to, so it is also the row whose
+                # absence kept the drawer mesh's collision socket unminted: the
+                # engine would have had a trigger to pull with no box to test.
+                box_w = max(2 * t, box_x1 - box_x0)
+                shelf_plan.append({
+                    "kind": "drawer",
+                    "front": f"{name_prefix}_C{c_idx + 1}_Drawer_{z_idx + 1}",
+                    "box": [col_facade_x + box_x0 + t, 0.0, dr_z + dr_lift_rel + t,
+                            box_w - 2 * t, box_depth - t, wall_h],
+                })
                 drawer_obj = build_facade_object(
                     f"{name_prefix}_C{c_idx + 1}_Drawer_{z_idx + 1}",
                     create_box_from_verts(d_verts, d_faces), collection, parent, m_facade,
