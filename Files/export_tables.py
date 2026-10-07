@@ -259,13 +259,88 @@ def _drawers_text(bake, entries):
     return "\n".join(lines) + "\n"
 
 
+def _unlink(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _write_batch(targets):
+    """Write every table beside its target, then swap all of them in.
+
+    One batch, because the engine imports the tables together with the FBX
+    and joins them on Socket: a set written half way - fresh doors next to
+    shelves left over from the previous bake - would diverge there with no
+    error anywhere. Two ways to fail, and both say "none of them":
+
+    * the WRITE fails (disk full, permission, path) - nothing is swapped,
+      so whatever was on disk stays on disk, whole;
+    * a SWAP fails (a destination locked by whoever is importing) - every
+      file already swapped is put back byte for byte from a snapshot taken
+      before the first one moved. The file that refused is the one that
+      never moved, so the restore never has to touch it.
+
+    Returns the target path of each table holding the new content, None for
+    the ones that do not - so a caller can still name what was lost.
+    """
+    staged = []
+    try:
+        for final, write in targets:
+            tmp = final + ".tmp"
+            write(tmp)
+            staged.append((tmp, final))
+    except OSError as exc:
+        warn(f"bake: table batch stopped while writing, nothing replaced: {exc}")
+        for tmp, _ in staged:
+            _unlink(tmp)
+        return [None] * len(targets)
+
+    # What is on disk right now. These are three small CSVs, read once,
+    # before anything moves - cheaper than a .old copy per file and it does
+    # not leave a half-renamed directory behind if the process dies.
+    before = []
+    for _, final in staged:
+        try:
+            with open(final, "rb") as fh:
+                before.append(fh.read())
+        except OSError:
+            before.append(None)
+
+    for i, (tmp, final) in enumerate(staged):
+        try:
+            os.replace(tmp, final)
+        except OSError as exc:
+            warn(f"bake: table batch could not swap "
+                 f"{os.path.basename(final)} in, previous set restored: {exc}")
+            # Only the ones already swapped moved; the rest never did.
+            for (_, done_path), old in zip(staged[:i], before[:i]):
+                if old is None:
+                    _unlink(done_path)
+                    continue
+                try:
+                    with open(done_path, "wb") as fh:
+                        fh.write(old)
+                except OSError as restore_exc:
+                    warn(f"bake: could not restore "
+                         f"{os.path.basename(done_path)}: {restore_exc}")
+            for tmp2, _ in staged[i:]:
+                _unlink(tmp2)
+            return [None] * len(targets)
+    return [final for _, final in staged]
+
+
 def write_tables(directory, bake, door_entries, drawer_entries, shelf_entries=None):
     """Write the four tables into `directory`; returns
     (doors_csv, drawers_csv, drawers_txt, shelves_csv).
 
-    A failure of any write is a warning, not a failed bake: the meshes and
-    sockets are already complete, and the same rule the bake report follows
-    (never raise over the text files) applies here.
+    The three CSVs are written as ONE batch (see _write_batch): all of them,
+    or none of them. The TXT is prose and goes on its own - a report that
+    cannot be written must not take the machine tables with it.
+
+    A failure is still a warning, not a failed bake: the meshes and sockets
+    are already complete, and the same rule the bake report follows (never
+    raise over the text files) applies here.
 
     A model with no storage slot at all still gets a shelves CSV with just its
     header: the engine side reads the file unconditionally, and "no slots" is a
@@ -273,29 +348,21 @@ def write_tables(directory, bake, door_entries, drawer_entries, shelf_entries=No
     same reason - a model with no drawer says so by having no row, not by
     having no file.
     """
-    csv_path = os.path.join(directory, f"{bake}_doors.csv")
-    drawers_csv_path = os.path.join(directory, f"{bake}_drawers.csv")
+    targets = (
+        (os.path.join(directory, f"{bake}_doors.csv"),
+         lambda p: _write_doors_csv(p, door_entries)),
+        (os.path.join(directory, f"{bake}_drawers.csv"),
+         lambda p: _write_drawers_csv(p, drawer_entries)),
+        (os.path.join(directory, f"{bake}_shelves.csv"),
+         lambda p: _write_shelves_csv(p, shelf_entries or [])),
+    )
     txt_path = os.path.join(directory, f"{bake}_drawers.txt")
-    shelves_path = os.path.join(directory, f"{bake}_shelves.csv")
-    try:
-        _write_doors_csv(csv_path, door_entries)
-    except OSError as exc:
-        warn(f"bake: could not write the doors CSV: {exc}")
-        csv_path = None
-    try:
-        _write_drawers_csv(drawers_csv_path, drawer_entries)
-    except OSError as exc:
-        warn(f"bake: could not write the drawers CSV: {exc}")
-        drawers_csv_path = None
+    doors_csv_path, drawers_csv_path, shelves_path = _write_batch(targets)
+
     try:
         with open(txt_path, "w", encoding="utf-8") as fh:
             fh.write(_drawers_text(bake, drawer_entries))
     except OSError as exc:
         warn(f"bake: could not write the drawers TXT: {exc}")
         txt_path = None
-    try:
-        _write_shelves_csv(shelves_path, shelf_entries or [])
-    except OSError as exc:
-        warn(f"bake: could not write the shelves CSV: {exc}")
-        shelves_path = None
-    return csv_path, drawers_csv_path, txt_path, shelves_path
+    return doors_csv_path, drawers_csv_path, txt_path, shelves_path
