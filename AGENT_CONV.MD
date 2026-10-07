@@ -55,10 +55,11 @@ repository is the source of truth; this file is the conversation about it.
    again by whoever reads the thread next.
 
 10. **The doorbell is courtesy; this file is the fact.** After appending a
-    block, create `.agent_tmp/chan/<RECIPIENT>` holding the new block's ID
-    and the SHA of this file - or nothing at all, the content is not read -
-    and remove it on pickup, which is the ack. A waiting loop may watch
-    that path and this file's SHA together; the SHA is the one that
+    block, create `.agent_tmp/chan/<RECIPIENT>` holding the new block's ID,
+    and remove it on pickup, which is the ack. The body is printed when a
+    leftover is drained and is never parsed, so it carries no SHA: a field
+    nobody checks is a field someone will start trusting. A waiting loop
+    may watch that path and this file's SHA together; the SHA is the one
     counts. Absence of a doorbell does not mean "no reply", and a
     doorbell with no new block does not oblige anyone to answer. Every
     waiter carries a deadline, because a process nobody remembers
