@@ -424,6 +424,24 @@ def check_drawers_csv(path, txt_path, rows, objects):
           % (len(drows), len(wanted)))
 
 
+def _rm_tree(path):
+    """Delete a directory the export may have filled with texture folders.
+
+    The FBX writer drops a "*.fbm" beside the file, so a flat rmdir of the
+    probe directory fails on it - and fails inside the finally that is
+    supposed to leave the gate clean.
+    """
+    if not os.path.isdir(path):
+        return
+    for n in os.listdir(path):
+        p = os.path.join(path, n)
+        if os.path.isdir(p) and not os.path.islink(p):
+            _rm_tree(p)
+        else:
+            os.remove(p)
+    os.rmdir(path)
+
+
 def check_roundtrip(key, rows, fbx_path, yaw_by_section, baked_names):
     """Export -> wipe -> import, then read the sockets back out of the file."""
     assert os.path.isfile(fbx_path), "no FBX: " + fbx_path
@@ -549,6 +567,41 @@ def run(key, baseline_dir):
     print("  re-bake: sockets and tables byte-identical (RowName stable)")
 
     fbx_path = os.path.join(fbx_dir, BAKE + ".fbx")
+    # Q11: the three machine tables are ONE batch - all of them, or none.
+    # The engine side imports the FBX and the tables in one pass and joins
+    # them on Socket; K-5 measured that a model edit shares 0 of 2 drawer row
+    # names and 2 of 4 door row names between bakes, so a batch written half
+    # way - fresh doors next to shelves left over from the previous bake -
+    # would diverge on the engine side with no error anywhere.
+    #
+    # _shelves.csv made into a directory reproduces the failure the write
+    # used to swallow per file: the shelves write raises, and what matters is
+    # whether the other two still land. The FBX in the same directory is
+    # expected - only the tables are in question.
+    poison_dir = os.path.join(fbx_dir, "q11_batch")
+    _rm_tree(poison_dir)
+    os.makedirs(poison_dir)
+    os.mkdir(os.path.join(poison_dir, BAKE + "_shelves.csv"))
+    try:
+        assert bpy.ops.kitchen.export_fbx(
+            filepath=os.path.join(poison_dir, BAKE + ".fbx")) == {'FINISHED'}, \
+            "poison export " + key
+        # The FBX has to be there, or "no CSV" would prove only that the probe
+        # never ran rather than that the batch refused to go half way.
+        assert os.path.isfile(os.path.join(poison_dir, BAKE + ".fbx")), \
+            "poison export produced no FBX - the probe did not run"
+        landed = sorted(n for n in os.listdir(poison_dir)
+                        if n.endswith(".csv")
+                        and os.path.isfile(os.path.join(poison_dir, n)))
+        assert not landed, \
+            "the tables are not one batch: shelves could not be written, " \
+            "but %r were" % landed
+        temps = sorted(n for n in os.listdir(poison_dir) if n.endswith(".tmp"))
+        assert not temps, "half-written tables left behind: %r" % temps
+    finally:
+        _rm_tree(poison_dir)
+    print("  table batch: a failed write leaves no partial set")
+
     assert bpy.ops.kitchen.export_fbx(filepath=fbx_path) == {'FINISHED'}, "export " + key
 
     # Sockets as Blender has them, before the file is round-tripped. Everything
