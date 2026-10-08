@@ -41,11 +41,12 @@ Outputs (naming per the Epic FBX Static Mesh Pipeline rules):
                           doors and drawers take it first, compartment
                           sockets continue past them, so no body ever wears
                           the same number twice.
-  SOCKET_ on the drawer mesh also carries the compartment centre of that
-                          drawer, expressed in the drawer's own frame: the
-                          engine parents the drawer to its mount socket, so
-                          this offset is what puts the component back on the
-                          shelf table's Loc once the drawer is closed.
+  SOCKET_ on the drawer mesh also carries the pose of that drawer's
+                          compartment, expressed in the drawer's own frame: the
+                          centre plus the section yaw, so the engine's parent
+                          chain (mount socket x this socket) lands back on the
+                          shelf table's Loc with the box on the section's axes
+                          once the drawer is closed.
   UBX_<MeshName>_NN       colliders cloned and renamed after their new owner;
                           body colliders keep their world transform, door and
                           drawer colliders are rebased into the owner's frame
@@ -67,7 +68,9 @@ Alongside the report, four engine-facing tables are written (see export_tables):
   <bake>_shelves.csv  one row per storage slot: an invisible box around one
                       functional compartment, the join key to the opening that
                       reaches it (DoorSocket) and the socket an object placed
-                      INSIDE it hangs on (SlotSocket)
+                      INSIDE it hangs on (SlotSocket); Loc is in the body's
+                      frame, Ext/Clear in the section's own - the frame the
+                      socket carries
 """
 import bpy
 import bmesh
@@ -603,7 +606,12 @@ def bake_kitchen(props, scene):
             name = f"SM_{bake}_{kind}_{len(bucket) + 1:02d}"
             obj = _new_baked_object(name, mesh, coll, slots)
             obj["bake_hash"] = sig
-            record = {"name": name, "sockets": [], "sources": []}
+            # "root" is the source this unique mesh was built from. The collider
+            # pass clones one set of UBX per record, and only from this root -
+            # every deduplicated instance carries the same boxes in the same
+            # local frame, so taking each instance's set would stack N identical
+            # colliders on the one shared mesh.
+            record = {"name": name, "sockets": [], "sources": [], "root": root}
             bucket.append(record)
             sig_map[sig] = record
         else:
@@ -681,6 +689,14 @@ def bake_kitchen(props, scene):
                 root = node
         if root is not None and root in root_to_record:
             record = root_to_record[root]
+            if record["root"] is not root:
+                # A deduplicated instance of an already-baked unique mesh: its
+                # colliders are the same boxes in the same record frame, and the
+                # set was cloned from the root that built the mesh. Cloning this
+                # instance's too would give the shared mesh N overlapping UBX
+                # sets - UE reads every one of them into the static mesh's
+                # collision.
+                continue
             # Rebased into the owner frame: the door moved to its pivot, the
             # collider must follow or the FBX pair no longer lines up.
             pivot = _record_pivot(root)
@@ -896,11 +912,15 @@ def _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name, upper_n
             cy = box[1] + box[4] / 2.0
             cz = box[2] + box[5] / 2.0
             loc = frame @ (obj.matrix_world @ Vector((cx, cy, cz)))
-            # Sizes need the rotation, too: a corner section is turned, so its
-            # local axes are not the body's. The two opposite corners of each box
-            # give the world axis-aligned span of the slot.
-            ext_lo, ext_hi = _world_span(obj.matrix_world, frame, box)
-            size = (ext_hi[0] - ext_lo[0], ext_hi[1] - ext_lo[1], ext_hi[2] - ext_lo[2])
+            # Sizes stay in the SECTION's own frame - the frame the compartment
+            # socket minted below carries, because its yaw is this same section
+            # yaw (contract 4.5: the box faces where the socket faces). The
+            # engine builds the collider from Ext with the socket's axes and
+            # nothing else, so a body-frame span would hand a turned corner
+            # section a box rotated by its own yaw: X and Y swap the moment the
+            # section stands perpendicular to the run. Loc is the only number
+            # this table states in the body's frame.
+            size = (box[3], box[4], box[5])
 
             row_name = f"{base}_Z{i:02d}"
             if row_name in seen:
@@ -914,7 +934,7 @@ def _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name, upper_n
             if slot_type == "drawer":
                 slot_socket = _mint_drawer_socket(
                     coll, socket_counters, bpy.data.objects.get(d_row["mesh"]),
-                    d_row["mesh"], loc, bpy.data.objects.get(socket_name))
+                    d_row["mesh"], loc, bpy.data.objects.get(socket_name), yaw)
                 if slot_socket is None:
                     warn(f"bake: slot {i} of '{obj.name}' has no drawer mesh or "
                          f"mount socket to hang its compartment socket on - "
@@ -990,16 +1010,18 @@ def _mint_slot_socket(coll, counters, owner_obj, row_name, loc, yaw):
     return name
 
 
-def _mint_drawer_socket(coll, counters, mesh_obj, mesh_name, loc, mount):
+def _mint_drawer_socket(coll, counters, mesh_obj, mesh_name, loc, mount, yaw):
     """One EMPTY on the DRAWER mesh, at that drawer's compartment centre.
 
     The component this socket carries has to travel when the drawer opens: a
     trigger hanging off the body would sit in the closed drawer's space while
     the drawer and everything in it are somewhere else entirely. So it hangs
-    on the drawer mesh, and the position is written in the drawer's OWN frame
-    - mount socket inverse times the compartment centre. The engine parents
-    the drawer to that mount socket, so multiplying back yields Loc exactly,
-    whatever rotation the mount happens to carry.
+    on the drawer mesh, and the pose is written in the drawer's OWN frame
+    - mount socket inverse times the compartment pose (centre AND the section
+    yaw). The engine parents the drawer to that mount socket, so multiplying
+    back yields T(Loc) x R(yaw) exactly, whatever rotation the mount carries:
+    the net pose equals what a body-side compartment socket would have, which
+    is what keeps the collider's axes on the section frame (contract 4.5).
 
     Identical drawers bake into ONE mesh and a socket lives on the mesh, so a
     single socket serves every instance - and it has to, because the offset is
@@ -1012,9 +1034,9 @@ def _mint_drawer_socket(coll, counters, mesh_obj, mesh_name, loc, mount):
     """
     if mesh_obj is None or mount is None:
         return None
-    target = mount.matrix_world.inverted() @ Matrix.Translation(loc)
+    target = mount.matrix_world.inverted() @ Matrix.Translation(loc) @ Matrix.Rotation(yaw, 4, 'Z')
     idx = mesh_name.rsplit("_", 1)[-1]
-    # Identical drawers bake into one mesh, and the centre is the same for every
+    # Identical drawers bake into one mesh, and the pose is the same for every
     # instance of the same drawer - so the socket already minted for this mesh is
     # the answer for the next row too. A second one would hand the engine two
     # placements to choose between; a different one would mean two rows agree on
@@ -1028,6 +1050,14 @@ def _mint_drawer_socket(coll, counters, mesh_obj, mesh_name, loc, mount):
                  f"disagrees with {existing.name} at {tuple(round(v, 4) for v in existing.matrix_world.translation)} - "
                  f"one mesh cannot hold two compartments, the row is skipped")
             return None
+        swing = existing.matrix_world.to_quaternion().rotation_difference(
+            target.to_quaternion()).angle
+        if swing > 1e-4:
+            warn(f"bake: compartment yaw of {mesh_name} at "
+                 f"{round(math.degrees(_section_yaw(target)), 2)} deg disagrees with {existing.name} at "
+                 f"{round(math.degrees(_section_yaw(existing.matrix_world)), 2)} deg - "
+                 f"one mesh cannot face two ways, the row is skipped")
+            return None
         return existing.name
 
     counters[mesh_name] = counters.get(mesh_name, 0) + 1
@@ -1036,32 +1066,12 @@ def _mint_drawer_socket(coll, counters, mesh_obj, mesh_name, loc, mount):
     coll.objects.link(sock)
     sock.empty_display_type = 'PLAIN_AXES'
     sock.empty_display_size = 0.010
-    sock.matrix_world = mount.matrix_world.inverted() @ Matrix.Translation(loc)
+    sock.matrix_world = target
     sock.parent = mesh_obj
     sock.matrix_parent_inverse = mesh_obj.matrix_world.inverted()
     return name
 
 
-def _world_span(obj_matrix, frame, box):
-    """Axis-aligned (lo, hi) of a section-local box, in the body frame.
-
-    Only rotation can turn a local box, and the bake's frames are translations of
-    the world frame, so measuring the eight corners is enough and a turned corner
-    section still gets a box the engine can collide against.
-    """
-    m = frame @ obj_matrix
-    x0, y0, z0, sx, sy, sz = box
-    lo = [1e9, 1e9, 1e9]
-    hi = [-1e9, -1e9, -1e9]
-    for c in ((x0, y0, z0), (x0 + sx, y0, z0), (x0, y0 + sy, z0), (x0 + sx, y0 + sy, z0),
-              (x0, y0, z0 + sz), (x0 + sx, y0, z0 + sz), (x0, y0 + sy, z0 + sz),
-              (x0 + sx, y0 + sy, z0 + sz)):
-        p = m @ Vector(c)
-        for a in range(3):
-            v = (p.x, p.y, p.z)[a]
-            lo[a] = min(lo[a], v)
-            hi[a] = max(hi[a], v)
-    return lo, hi
 
 
 class KITCHEN_OT_Bake(Operator):

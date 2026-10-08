@@ -34,7 +34,10 @@ Asserted:
   * a drawer row's SlotSocket is the collision socket on the drawer mesh - a
     different socket from its mount (DoorSocket) - and with the drawer closed
     it lands on the row's LocX/Y/Z within 1e-3 m, which is what makes it a
-    compartment centre rather than an arbitrary point;
+    compartment centre rather than an arbitrary point; the composed pose
+    (mount x socket) also carries the section's yaw, because the engine sizes
+    the collider in that frame and a rotation-cancelling socket would hand a
+    turned section a box standing in the body's axes;
   * round-tripped through FBX: the socket is present under exactly its
     SlotSocket name, parented to a MESH (FindMeshSockets only walks the mesh's
     own subtree, so a sibling is dropped without a word), and a compartment
@@ -464,19 +467,37 @@ def check_roundtrip(key, rows, fbx_path, yaw_by_section, baked_names):
 
         # A drawer's compartment socket rides the drawer, so its position in
         # the file is relative to that mesh, not to the body: what has to hold
-        # is that closing the drawer puts it back on the row's Loc.
+        # is that closing the drawer puts it back on the row's Loc. And the
+        # POSE, not just the point: mount x socket must also carry the
+        # section's yaw, because the engine builds the collider from Ext with
+        # these axes (contract 4.5) - a socket that cancels the mount's
+        # rotation would leave a turned section's drawer box standing in the
+        # body's frame while its Ext numbers are in the section's.
         if r["Type"] == "drawer":
             mount = imported.get(r["DoorSocket"])
             assert mount is not None, "mount %s missing from the FBX" % r["DoorSocket"]
             assert mount.parent.name == r["Body"], \
                 "mount %s hangs on %r, want %r" % (
                     r["DoorSocket"], mount.parent.name, r["Body"])
+            closed = mount.matrix_world @ sock.matrix_world
             want = (float(r["LocX"]), float(r["LocY"]), float(r["LocZ"]))
-            got = (mount.matrix_world @ sock.matrix_world).translation
+            got = closed.translation
             delta = max(abs(got[i] - want[i]) for i in range(3))
             assert delta <= TOL, \
                 "%s closed-drawer trigger off by %.6f m: %r vs %r" % (
                     r["RowName"], delta, tuple(round(v, 4) for v in got), want)
+
+            section = r["Section"]
+            if section in yaw_by_section:
+                want_yaw = yaw_by_section[section]
+                got_yaw = closed.to_euler('XYZ').z
+                assert ang_close(got_yaw, want_yaw), \
+                    "%s net yaw %.3f deg, section %s is at %.3f deg" % (
+                        r["RowName"], math.degrees(got_yaw), section,
+                        math.degrees(want_yaw))
+                if not ang_close(want_yaw, 0.0):
+                    print("    drawer yaw %-9s %-28s %7.2f deg (section %s)"
+                          % (r["RowName"], sock.name, math.degrees(got_yaw), section))
             continue
 
         want = (float(r["LocX"]), float(r["LocY"]), float(r["LocZ"]))

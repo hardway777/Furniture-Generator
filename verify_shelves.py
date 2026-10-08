@@ -131,6 +131,35 @@ def check_scene(scene_key):
     assert len(set(names)) == len(names), "duplicate RowName"
     assert all(n.strip() for n in names), "empty RowName"
 
+    # The numbers, not just their count: Ext/Clear must be the PLAN box itself,
+    # because the engine builds the collider from those numbers with the
+    # compartment socket's axes - and that socket carries the section's yaw
+    # (contract 4.5, "the box faces where the socket faces"). A body-frame
+    # span would swap X and Y the moment a corner section stands perpendicular
+    # to the run, and the box would stand rotated by its own yaw. On a straight
+    # run the two frames coincide, which is why only the turned scenes can tell
+    # them apart - so the comparison is against the plan, not against a copy.
+    def exported_plan(pair):
+        _o, row = pair
+        box = row.get("box")
+        if not box or len(box) != 6:
+            return False
+        front = row.get("front")
+        if row.get("kind") == "drawer":
+            return bool(front) and front in drawer_sources
+        return not front or front in door_sources
+
+    kept = [p for p in plan if exported_plan(p)]
+    assert len(kept) == len(rows), "plan/table order no longer aligns"
+    for (_o, prow), r in zip(kept, rows):
+        want = prow["box"]
+        for a in range(3):
+            got = float(r["Ext" + "XYZ"[a]])
+            assert abs(got - want[3 + a]) < 1e-4, \
+                "Ext%s %.4f != plan %.4f (section frame): %s" % (
+                    "XYZ"[a], got, want[3 + a], r["RowName"])
+    print("  extents in section frame:", len(rows), "rows")
+
     for r in rows:
         assert r["Body"] in ("SM_%s_Body" % props.bake_name,
                              "SM_%s_UpperBody" % props.bake_name), \

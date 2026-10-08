@@ -174,9 +174,14 @@ def shelf_entry(row_name, section, body, slot_type, door_socket, slot_socket,
                 loc, ext, clear, max_items, depth=None):
     """One CSV record for a storage slot, placed in its body's frame.
 
-    `loc` is the centre of the box, `ext`/`clear` the full sizes; all are
-    already rebased into the body pivot by the bake, the same convention the
-    doors table uses, so both tables can be joined on Body and share one space.
+    `loc` is the centre of the box, rebased into the body pivot by the bake,
+    the same convention the doors table uses, so both tables can be joined on
+    Body and share one space. `ext`/`clear` are the full sizes in the SECTION's
+    own frame - the frame the SlotSocket carries, its yaw being the section's
+    yaw - because the engine builds the collider from them with the socket's
+    axes and nothing else. On a straight run the two frames coincide; on a
+    turned corner section a body-frame size would swap X and Y and the box
+    would stand rotated by its own yaw.
 
     `door_socket` is copied verbatim from the Socket column of the doors CSV for
     a closed/open slot, and for Type=drawer the drawer's own mount socket - an
