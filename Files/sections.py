@@ -1419,7 +1419,7 @@ def build_upstand(
 
         upstand_obj = new_object(f"{name_prefix}_Upstand", u_mesh, collection, parent, m_counter["name"])
         upstand_obj.matrix_world = matrix
-        #if use_bevel: #НЕ ПРИМЕНЯТЬ! ЛОМАЕТ НОРМАЛИ!
+        #if use_bevel:
         #    apply_bevel_to_object(upstand_obj, bevel_w, bevel_segs)
         apply_box_uvs(upstand_obj, m_counter["u"], m_counter["v"], m_counter["rot"])
 
