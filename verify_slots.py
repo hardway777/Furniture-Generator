@@ -90,7 +90,8 @@ BAKE = "SLOTSLOT"
 SCENES = ("bedside_dresser", "full_l_kitchen", "wardrobe_column")
 TOL = 1e-3
 
-# SOCKET_<owner>_NN, where owner itself may contain underscores.
+# SOCKET_<bake>_<owner>_NN, where owner itself may contain underscores. The
+# bake tag leads so two bakes can coexist in one scene without Blender's .001.
 NAME_RE = re.compile(r"^SOCKET_(.+)_(\d{2})$")
 MOUNT_OWNER_RE = re.compile(r"^(Door|Drawer)(\d{2})$")
 COL_OWNER_RE = re.compile(r"^DrawerCol(\d{2})$")

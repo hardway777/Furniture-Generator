@@ -134,6 +134,11 @@ class KITCHEN_PT_MainPanel(Panel):
 
         layout.separator()
         layout.prop(props, "kitchen_id")
+        # The supported way to a second assembly in this scene: generate again
+        # with the same id would purge the first one, and a hand-made copy
+        # litters every name with .001. The clone rewrites all names onto the
+        # new id, so both assemblies stay addressable by their prefixes.
+        layout.operator("kitchen.clone_furniture", icon='DUPLICATE', text=STR["ui_clone_btn"])
         layout.operator("kitchen.generate_kitchen", icon='MOD_BUILD', text=STR["ui_generate_btn"])
 
         # Which copy is running matters: Blender installs an extension by copying it into

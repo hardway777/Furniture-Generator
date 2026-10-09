@@ -5,6 +5,7 @@ Moved verbatim from the single-module addon; no body was edited during the move.
 import bpy
 import os
 import json
+import re
 import time
 from bpy.props import (
     FloatProperty, IntProperty, BoolProperty, EnumProperty,
@@ -12,12 +13,15 @@ from bpy.props import (
 )
 from bpy.types import PropertyGroup, Operator, Panel
 from .core import (
+    COLLIDER_COLL_SUFFIX,
     GEN_WARNINGS,
     SEC_APPLIANCE,
     SEC_CORNER,
     SEC_HOOD_GAP,
     SEC_NORMAL,
     SEC_WARDROBE,
+    SHELF_PLAN_KEY,
+    UBX_FOLLOW_KEY,
     clear_warnings,
     log,
     warn,
@@ -27,6 +31,7 @@ from .properties import (
     drop_empty_kitchen_collections,
     ensure_collections_ready,
     get_or_create_kitchen_collection,
+    kitchen_collection_name,
     resolve_preset_path,
     serialize_kitchen,
     update_column_zones,
@@ -409,6 +414,164 @@ def run_generation(props, scene, gen_collisions=True):
             print(f"     - {message}")
 
     return t_total_ms
+
+
+# [ANCHOR: CLONE_ASSEMBLY]
+# ============================================================
+def _sanitize_furniture_id(raw):
+    # Same rule as the bake name: the id lives inside object names and is
+    # matched by prefix, so anything a name cannot carry becomes an underscore.
+    name = re.sub(r"[^A-Za-z0-9_]", "_", (raw or "").strip())
+    return name or "F01"
+
+
+def _next_furniture_id(src):
+    """K01 -> K02, WARDROBE_3 -> WARDROBE_4, SHELF -> SHELF_2: the dialog default."""
+    m = re.search(r"^(.*?)(\d+)$", src)
+    if m is None:
+        return f"{src}_2"
+    head, num = m.group(1), m.group(2)
+    return f"{head}{int(num) + 1:0{len(num)}d}"
+
+
+def _rewrite_assembly_name(name, src, dst):
+    """One object name of the assembly rewritten onto the new furniture id.
+
+    The generator mints exactly three shapes - SM_<id>_, UBX_SM_<id>_ and
+    SOCKET_SM_<id>_ (a hinge socket is SOCKET_ plus the door's full name) - so
+    those three prefixes are the whole rewrite. Anything else is a name the
+    user added by hand and is kept.
+    """
+    src_prefix = f"SM_{src}_"
+    for head in ("UBX_", "SOCKET_", ""):
+        if not head:
+            rest = name
+        elif name.startswith(head):
+            rest = name[len(head):]
+        else:
+            continue
+        if rest.startswith(src_prefix):
+            return f"{head}SM_{dst}_{rest[len(src_prefix):]}"
+    return name
+
+
+def clone_furniture_id(props, scene, dst_raw):
+    """Copy the assembly of props.kitchen_id onto a new furniture id.
+
+    A second assembly in one scene cannot be made by generating again: the run
+    purges everything that carries the current id. The way around it - copying
+    the collection in the outliner - is what hands every object a .001 suffix,
+    and the bake then mixes the copies into one body. This is the supported
+    path instead: every object (colliders and hinge sockets included) is copied,
+    renamed onto the new id, and the two name-valued custom properties the
+    addon later resolves - a collider's follow target and a shelf plan's door
+    names - are rewritten to point at the copies. Returns (object count, id).
+    """
+    src = props.kitchen_id
+    dst = _sanitize_furniture_id(dst_raw)
+    if dst == src:
+        raise ValueError(STR["op_bake_name_bad"])
+    if bpy.data.collections.get(kitchen_collection_name(dst)) is not None \
+            or bpy.data.objects.get(f"SM_{dst}_Root") is not None:
+        raise ValueError(STR["op_clone_id_used"].format(dst=dst))
+
+    src_coll = bpy.data.collections.get(kitchen_collection_name(src))
+    if src_coll is not None:
+        src_objects = list(src_coll.all_objects)
+    else:
+        # A collection may have been renamed or deleted while the objects
+        # stayed; the prefixes are the addon's own naming rule, so they are
+        # enough to find the assembly on their own.
+        prefixes = (f"SM_{src}_", f"UBX_SM_{src}_", f"SOCKET_SM_{src}_")
+        src_objects = [o for o in bpy.data.objects
+                       if any(o.name.startswith(p) for p in prefixes)]
+    if not src_objects:
+        raise ValueError(STR["op_clone_no_source"].format(src=src))
+
+    dst_coll = bpy.data.collections.new(kitchen_collection_name(dst))
+    scene.collection.children.link(dst_coll)
+    dst_colliders = bpy.data.collections.new(
+        f"{kitchen_collection_name(dst)}{COLLIDER_COLL_SUFFIX}")
+    dst_coll.children.link(dst_colliders)
+
+    src_len = len(src)
+    src_prefix = f"SM_{src}_"
+    mapping = {}
+    for orig in src_objects:
+        cp = orig.copy()
+        if orig.data is not None:
+            cp.data = orig.data.copy()
+        # Colliders are the flat unparented list in the _Colliders child
+        # collection; everything else belongs to the assembly collection.
+        cp.name = _rewrite_assembly_name(orig.name, src, dst)
+        if orig.name.startswith("UBX_"):
+            dst_colliders.objects.link(cp)
+        else:
+            dst_coll.objects.link(cp)
+        mapping[orig] = cp
+
+    # Parents are remapped to the copies, so the interior hierarchy moves as
+    # one: doors stay on their sockets, handles on their doors. matrix_parent_
+    # inverse was copied and describes the same relative pose, so transforms
+    # survive untouched. A parent outside the assembly cannot be remapped and
+    # is kept - the root empty is the top and never has one.
+    for orig, cp in mapping.items():
+        if orig.parent is not None and orig.parent in mapping:
+            cp.parent = mapping[orig.parent]
+
+    # Two custom properties carry object NAMES, not pointers, so the copies
+    # must be re-pointed at the copies:
+    #   ubx_follow_target  - which object a bbox collider re-aligns to
+    #   shelf_plan         - which door/drawer closes each planned compartment
+    for orig, cp in mapping.items():
+        follow = cp.get(UBX_FOLLOW_KEY)
+        if isinstance(follow, str) and follow.startswith(src_prefix):
+            cp[UBX_FOLLOW_KEY] = f"SM_{dst}_{follow[src_len + 4:]}"
+        raw_plan = cp.get(SHELF_PLAN_KEY)
+        if isinstance(raw_plan, str):
+            try:
+                plan = json.loads(raw_plan)
+            except (ValueError, TypeError):
+                warn(f"clone: shelf plan of '{cp.name}' is unreadable, copied as is")
+                continue
+            changed = False
+            for plan_row in plan if isinstance(plan, list) else []:
+                front = plan_row.get("front")
+                if isinstance(front, str) and front.startswith(src_prefix):
+                    plan_row["front"] = f"SM_{dst}_{front[src_len + 4:]}"
+                    changed = True
+            if changed:
+                cp[SHELF_PLAN_KEY] = json.dumps(plan)
+
+    props.kitchen_id = dst
+    return len(mapping), dst
+
+
+class KITCHEN_OT_CloneFurniture(Operator):
+    """Clone the current assembly under a new Furniture ID, names rewritten."""
+
+    bl_idname = "kitchen.clone_furniture"
+    bl_label = STR["op_clone_label"]
+    bl_description = STR["op_clone_desc"]
+    bl_options = {'REGISTER', 'UNDO'}
+
+    new_id: StringProperty(name=STR["op_clone_new_id"], default="")
+
+    def invoke(self, context, event):
+        self.new_id = _next_furniture_id(
+            _sanitize_furniture_id(context.scene.kitchen_props.kitchen_id))
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        props = context.scene.kitchen_props
+        src = props.kitchen_id
+        try:
+            count, dst = clone_furniture_id(props, context.scene, self.new_id)
+        except ValueError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, STR["op_clone_done"].format(src=src, dst=dst, n=count))
+        return {'FINISHED'}
 
 
 # [ANCHOR: EXPORT_FBX]

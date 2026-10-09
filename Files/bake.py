@@ -23,9 +23,18 @@ Outputs (naming per the Epic FBX Static Mesh Pipeline rules):
                           and rotates around the pivot
   SM_<prefix>_Drawer_NN   one mesh per unique drawer (front + box + handle),
                           pivot at the front face centre
-  SOCKET_<ForWhom>_NN     sockets, named for who they are FOR and not for the
+  SOCKET_<bake>_<ForWhom>_NN
+                          sockets, named for who they are FOR and not for the
                           mesh they hang off - the hierarchy already answers
-                          whose they are, so the name may say for whom. They
+                          whose they are, so the name may say for whom. The
+                          bake name leads because two bakes coexist in one
+                          scene (a wardrobe and a kitchen baked side by side),
+                          and Blender renames a second SOCKET_Door01_01 to
+                          .001 - a name no table of that bake promises. The
+                          UE side strips the SOCKET_ mark and takes the rest
+                          verbatim (Q14), and the CSVs carry the same strings
+                          this bake minted, so the leading bake name changes
+                          nothing on the engine side. They
                           are CHILDREN of that mesh: FbxStaticMeshImport walks
                           the mesh's own node subtree only, so a sibling empty
                           is dropped without a word. Four kinds of owner:
@@ -108,6 +117,31 @@ def _sanitize_bake_name(raw):
     # word characters becomes an underscore.
     name = re.sub(r"[^A-Za-z0-9_]", "_", (raw or "").strip())
     return name or "EXP"
+
+
+# Blender resolves a name collision by appending ".001" ... ".9999". Nothing this
+# addon generates ever carries a dot, so a dot-number tail on an SM_/UBX_ name can
+# only come from the user duplicating an assembly by hand - a copy that would then
+# bake INTO the original (both carry the same SM_<id>_ prefix) and whose colliders
+# resolve against the wrong parts. Those objects are refused, not silently merged.
+_DUP_SUFFIX_RE = re.compile(r"\.\d{1,4}$")
+
+
+def _is_duplicate_name(name):
+    return bool(_DUP_SUFFIX_RE.search(name))
+
+
+def bake_name_taken_by_id(bake):
+    """True when a furniture id of this name already lives in the scene.
+
+    The bake's outputs wear SM_<bake>_, the same shape a generation of the id
+    <bake> wears. The current id is checked by the caller; a SECOND assembly in
+    the scene is just as real: a body named SM_<other>_Body would be taken for
+    that assembly's working model by the next bake of it, and the next Generate
+    would purge the bake instead of the old model.
+    """
+    return (bpy.data.objects.get(f"SM_{bake}_Root") is not None
+            or bpy.data.collections.get(f"{KITCHEN_COLL_PREFIX}{bake}") is not None)
 
 
 def _for_whom(mesh_name, bake):
@@ -496,10 +530,20 @@ def bake_kitchen(props, scene):
     if bake == kid:
         warn("bake: the bake name must differ from the kitchen id")
         return None
+    if bake_name_taken_by_id(bake):
+        warn(f"bake: '{bake}' is a Furniture ID already present in this scene - "
+             f"the bake name must not collide with it")
+        return None
 
     sm_prefix = f"SM_{kid}_"
     sources = [o for o in bpy.data.objects
                if o.type == 'MESH' and o.name.startswith(sm_prefix)]
+    strays = [o.name for o in sources if _is_duplicate_name(o.name)]
+    if strays:
+        warn(f"bake: {len(strays)} object(s) with a Blender duplicate suffix are "
+             f"excluded (they are hand-made copies, not part of the assembly): "
+             f"{strays[:8]}")
+        sources = [o for o in sources if not _is_duplicate_name(o.name)]
     if not sources:
         return None
 
@@ -622,7 +666,10 @@ def bake_kitchen(props, scene):
         # Door01 - and not for the body it hangs off, because the parent is
         # already the answer to "whose is this". The counter stays the body's,
         # so a compartment socket cannot be handed a number this body wears.
-        sock_name = f"SOCKET_{_for_whom(record['name'], bake)}_{socket_counters[owner]:02d}"
+        # The bake name leads (see the module docstring): two coexisting bakes
+        # both mint SOCKET_..._Door01_01, and Blender's .001 on the second one
+        # would name a node no table of this bake promises.
+        sock_name = f"SOCKET_{bake}_{_for_whom(record['name'], bake)}_{socket_counters[owner]:02d}"
         sock = bpy.data.objects.new(sock_name, None)
         coll.objects.link(sock)
         sock.empty_display_type = 'PLAIN_AXES'
@@ -644,6 +691,9 @@ def bake_kitchen(props, scene):
             sock.parent = owner_obj
             sock.matrix_parent_inverse = owner_obj.matrix_world.inverted()
 
+        # Capture the name Blender actually granted: if a collision ever slips
+        # through, the tables must promise the name that is in the file.
+        sock_name = sock.name
         record["sockets"].append(sock_name)
         record["sources"].append(root.name)
         root_to_record[root] = record
@@ -663,7 +713,7 @@ def bake_kitchen(props, scene):
     # for a drawer row - so the sockets must exist first.
     shelf_rows = _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name,
                              upper_name, body_frame, upper_pivot, kid, coll,
-                             socket_counters)
+                             socket_counters, bake)
 
     # ---- colliders --------------------------------------------------------
     ubx_prefix = f"UBX_SM_{kid}_"
@@ -672,8 +722,13 @@ def bake_kitchen(props, scene):
     body_ubx_counters = {body_name: 0}
     if split_upper:
         body_ubx_counters[upper_name] = 0
-    for u in sorted((o for o in bpy.data.objects if o.name.startswith(ubx_prefix)),
-                    key=lambda o: o.name):
+    ubx_all = sorted((o for o in bpy.data.objects if o.name.startswith(ubx_prefix)),
+                     key=lambda o: o.name)
+    ubx_strays = [u.name for u in ubx_all if _is_duplicate_name(u.name)]
+    if ubx_strays:
+        warn(f"bake: {len(ubx_strays)} collider(s) with a Blender duplicate suffix "
+             f"are excluded: {ubx_strays[:8]}")
+    for u in (u for u in ubx_all if not _is_duplicate_name(u.name)):
         target_name = u.name[len("UBX_"):].rsplit("_", 1)[0]
         target = by_name.get(target_name)
         if target is None or target.type != 'MESH':
@@ -812,7 +867,7 @@ def _shelf_slot_type(row):
 
 
 def _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name, upper_name,
-                body_frame, upper_pivot, kitchen_id, coll, socket_counters):
+                body_frame, upper_pivot, kitchen_id, coll, socket_counters, bake):
     """Storage slots of every carcass, placed in the frame of their own body.
 
     The boxes come off the plan the generator left on the carcass (see
@@ -934,7 +989,7 @@ def _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name, upper_n
             if slot_type == "drawer":
                 slot_socket = _mint_drawer_socket(
                     coll, socket_counters, bpy.data.objects.get(d_row["mesh"]),
-                    d_row["mesh"], loc, bpy.data.objects.get(socket_name), yaw)
+                    d_row["mesh"], loc, bpy.data.objects.get(socket_name), yaw, bake)
                 if slot_socket is None:
                     warn(f"bake: slot {i} of '{obj.name}' has no drawer mesh or "
                          f"mount socket to hang its compartment socket on - "
@@ -943,7 +998,7 @@ def _shelf_rows(sources, door_rows, drawer_rows, split_upper, body_name, upper_n
             else:
                 slot_socket = _mint_slot_socket(
                     coll, socket_counters, bpy.data.objects.get(owner),
-                    row_name, loc, yaw)
+                    row_name, loc, yaw, bake)
                 if slot_socket is None:
                     warn(f"bake: slot {i} of '{obj.name}' has no body '{owner}' "
                          f"to hang its socket on - the row is skipped")
@@ -975,7 +1030,7 @@ def _section_yaw(matrix):
     return math.atan2(x.y, x.x)
 
 
-def _mint_slot_socket(coll, counters, owner_obj, row_name, loc, yaw):
+def _mint_slot_socket(coll, counters, owner_obj, row_name, loc, yaw, bake):
     """One EMPTY per exported compartment, parented to its body mesh.
 
     Returns None when `owner_obj` is missing, and the caller drops the row: a
@@ -988,7 +1043,10 @@ def _mint_slot_socket(coll, counters, owner_obj, row_name, loc, yaw):
     identity, so that recipe leaves the socket's local transform equal to the
     body-frame numbers the shelves table prints next to it.
 
-    The name is SOCKET_<row name>_<NN>. NN continues the per-body counter the
+    The name is SOCKET_<bake>_<row name>_<NN>. The bake name leads for the same
+    reason it leads on the door sockets - two coexisting bakes would mint the
+    same names and Blender's .001 would break the tables' join keys. NN
+    continues the per-body counter the
     door and drawer sockets already advanced, so a compartment can never be
     handed a number that body is wearing, and the row name is both the owner
     (for whom: this compartment) and the key back to the CSV line. The parent
@@ -999,7 +1057,7 @@ def _mint_slot_socket(coll, counters, owner_obj, row_name, loc, yaw):
         return None
     owner = owner_obj.name
     counters[owner] = counters.get(owner, 0) + 1
-    name = f"SOCKET_{row_name}_{counters[owner]:02d}"
+    name = f"SOCKET_{bake}_{row_name}_{counters[owner]:02d}"
     sock = bpy.data.objects.new(name, None)
     coll.objects.link(sock)
     sock.empty_display_type = 'PLAIN_AXES'
@@ -1007,10 +1065,10 @@ def _mint_slot_socket(coll, counters, owner_obj, row_name, loc, yaw):
     sock.matrix_world = Matrix.Translation(loc) @ Matrix.Rotation(yaw, 4, 'Z')
     sock.parent = owner_obj
     sock.matrix_parent_inverse = owner_obj.matrix_world.inverted()
-    return name
+    return sock.name
 
 
-def _mint_drawer_socket(coll, counters, mesh_obj, mesh_name, loc, mount, yaw):
+def _mint_drawer_socket(coll, counters, mesh_obj, mesh_name, loc, mount, yaw, bake):
     """One EMPTY on the DRAWER mesh, at that drawer's compartment centre.
 
     The component this socket carries has to travel when the drawer opens: a
@@ -1043,7 +1101,7 @@ def _mint_drawer_socket(coll, counters, mesh_obj, mesh_name, loc, mount, yaw):
     # a mesh and disagree on where its compartment is, which no wording of the
     # table can express, so that row is dropped instead.
     existing = next((c for c in mesh_obj.children
-                     if c.name.startswith(f"SOCKET_DrawerCol{idx}_")), None)
+                     if c.name.startswith(f"SOCKET_{bake}_DrawerCol{idx}_")), None)
     if existing is not None:
         if (existing.matrix_world.translation - target.translation).length > 1e-6:
             warn(f"bake: compartment centre of {mesh_name} at {tuple(round(v, 4) for v in target.translation)} "
@@ -1061,7 +1119,7 @@ def _mint_drawer_socket(coll, counters, mesh_obj, mesh_name, loc, mount, yaw):
         return existing.name
 
     counters[mesh_name] = counters.get(mesh_name, 0) + 1
-    name = f"SOCKET_DrawerCol{idx}_{counters[mesh_name]:02d}"
+    name = f"SOCKET_{bake}_DrawerCol{idx}_{counters[mesh_name]:02d}"
     sock = bpy.data.objects.new(name, None)
     coll.objects.link(sock)
     sock.empty_display_type = 'PLAIN_AXES'
@@ -1069,7 +1127,7 @@ def _mint_drawer_socket(coll, counters, mesh_obj, mesh_name, loc, mount, yaw):
     sock.matrix_world = target
     sock.parent = mesh_obj
     sock.matrix_parent_inverse = mesh_obj.matrix_world.inverted()
-    return name
+    return sock.name
 
 
 
@@ -1085,8 +1143,14 @@ class KITCHEN_OT_Bake(Operator):
 
     def execute(self, context):
         props = context.scene.kitchen_props
-        if _sanitize_bake_name(props.bake_name) == props.kitchen_id:
+        bake = _sanitize_bake_name(props.bake_name)
+        if bake == props.kitchen_id:
             self.report({'WARNING'}, STR["op_bake_name_bad"])
+            return {'CANCELLED'}
+        # A bake name that equals ANOTHER assembly's id is a different failure
+        # than "nothing to bake", and the user can only act on it if told.
+        if bake_name_taken_by_id(bake):
+            self.report({'WARNING'}, STR["op_bake_name_used"])
             return {'CANCELLED'}
         result = bake_kitchen(props, context.scene)
         if result is None:

@@ -295,6 +295,7 @@ STR = {
     "ui_load": "Load",
     "ui_save": "Save",
     "ui_generate_btn": "Generate All Modules",
+    "ui_clone_btn": "Clone Assembly to New ID",
     "ui_bake_btn": "Bake for Export",
     "ui_export_fbx_btn": "Export FBX & Tables",
     "ui_version": "Addon v{v}",
@@ -334,6 +335,15 @@ STR = {
     "op_bake_done": "Bake complete: see the BAKE collection and the report file",
     "op_bake_no_source": "Nothing to bake: generate the kitchen first",
     "op_bake_name_bad": "Bake name must differ from the kitchen id",
+    "op_bake_name_used": "Bake name matches a Furniture ID already in this scene - pick another",
+    "op_clone_label": "Clone Assembly to New ID",
+    "op_clone_desc": ("Full copy of the assembly of the current Furniture ID under a new "
+                      "one: every object, collider and socket name is rewritten, so both "
+                      "assemblies live side by side without .001 renames"),
+    "op_clone_new_id": "New Furniture ID",
+    "op_clone_done": "Cloned '{src}' to '{dst}': {n} objects",
+    "op_clone_no_source": "Nothing to clone: no assembly for id '{src}' in this scene",
+    "op_clone_id_used": "Furniture ID '{dst}' is already in use in this scene",
     "op_export_fbx_label": "Export FBX & Tables",
     "op_export_fbx_desc": ("Bake, export the BAKE collection to FBX with its "
                            "SOCKET_ empties, and write the CSV/TXT tables "
