@@ -726,6 +726,7 @@ def sync_bbox_colliders(objs):
 
     See AGENT_NOTES.md [NOTE_16546]
     """
+    bpy.context.view_layer.update()
     moved = 0
     for ubx in objs:
         if ubx is None or ubx.type != 'MESH' or not ubx.name.startswith("UBX_"):

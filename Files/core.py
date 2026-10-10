@@ -1,6 +1,6 @@
 """core - Enums, asset paths, the warning list and the timing log.
 
-Moved verbatim from the single-module addon; no body was edited during the move.
+Moved verbatim from the single-module addon; nobody was edited during the move.
 """
 from mathutils import Vector, Matrix
 

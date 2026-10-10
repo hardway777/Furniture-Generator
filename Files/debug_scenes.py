@@ -1,6 +1,6 @@
 """debug_scenes - The DEBUG_SCENES table and the code that applies one.
 
-Moved verbatim from the single-module addon; no body was edited during the move.
+Moved verbatim from the single-module addon; nobody was edited during the move.
 """
 import bpy
 from bpy.props import (

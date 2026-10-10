@@ -1,4 +1,13 @@
 # ============================================================
+bl_info = {
+    "name": "Furniture Generator",
+    "author": "Hardway",
+    "version": (1, 0, 0),
+    "blender": (4, 0, 0),
+    "location": "View3D > Sidebar > Furniture",
+    "description": "Parametric furniture and kitchen generator",
+    "category": "3D View",
+}
 
 import bpy
 from bpy.props import PointerProperty
@@ -8,7 +17,7 @@ from .bake import KITCHEN_OT_Bake
 from .debug_scenes import KITCHEN_OT_DebugScene
 from .operators import KITCHEN_OT_CloneFurniture, KITCHEN_OT_CopyCol1ToAll, KITCHEN_OT_CopyLowerToUpper, KITCHEN_OT_DeletePreset, KITCHEN_OT_ExportFbx, KITCHEN_OT_Generate, KITCHEN_OT_LoadPreset, KITCHEN_OT_SavePreset, KITCHEN_OT_SetSectionsExpanded, unregister_live_timer
 from .panels import KITCHEN_PT_BakePanel, KITCHEN_PT_BevelPanel, KITCHEN_PT_Countertop, KITCHEN_PT_DebugPanel, KITCHEN_PT_GeneralPanel, KITCHEN_PT_Handles, KITCHEN_PT_LowerGlobal, KITCHEN_PT_LowerSections, KITCHEN_PT_MainPanel, KITCHEN_PT_Materials, KITCHEN_PT_UpperGlobal, KITCHEN_PT_UpperSections
-from .properties import CabinetColumn, CabinetZone, KitchenGeneratorProps, KitchenSection, ShelfBay, ShelfTier, unregister_grid_fix_timer, update_section_columns
+from .properties import CabinetColumn, CabinetZone, KitchenGeneratorProps, KitchenSection, ShelfBay, ShelfTier, unregister_grid_fix_timer, update_section_columns, ensure_collections_ready
 
 # [ANCHOR: REGISTRATION]
 # ============================================================
