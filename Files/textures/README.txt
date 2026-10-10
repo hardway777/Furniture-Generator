@@ -1,6 +1,14 @@
 PBR textures for the generator's materials
 ===========================================
 
+Created using 
+https://ambientcg.com/view?id=Wood026 
+https://ambientcg.com/view?id=Wood052
+from ambientCG.com, 
+
+licensed under the Creative Commons CC0 1.0 Universal License.
+https://creativecommons.org/publicdomain/zero/1.0/
+
 Drop free PBR map sets here, named after the pack they came from:
 
     T_WoodDark_01_BaseColor.jpg
