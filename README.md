@@ -2,7 +2,6 @@
 
 Furniture Modular Generator is a procedural modeling tool for Blender designed for environment artists, level designers, and archviz creators. It allows you to quickly build parametric modular kitchens, wardrobes, and living room storage directly in Blender, with dedicated pipelines for game engines such as Unreal Engine.
 
-Russian version: [README.ru.md](README.ru.md)
 
 ## Features
 
@@ -39,43 +38,6 @@ This add-on is designed for Blender 5.2 and newer.
 - Live Preview — automatic regeneration when values change
 - Wall Thickness — thickness of cabinet walls and panels
 
-## Project Structure
-
-```text
-Files/                          # Main add-on package
-├── __init__.py                 # Entry point and class registration
-├── core.py                     # Shared constants and utility functions
-├── strings.py                  # Localized UI text table
-├── properties.py               # RNA properties and preset logic
-├── operators.py                # Generation and preset operators
-├── panels.py                   # N-panel UI panels
-├── primitives.py               # Mesh primitives and geometry builders
-├── mesh_ops.py                 # Mesh ops, materials, and UBX colliders
-├── sections.py                 # Section generation logic
-├── row.py                      # Row assembly and layout logic
-├── solver.py                   # Parameter solver for cabinet sizing
-├── debug_scenes.py             # Debug presets and scenario loader
-├── bake.py                     # UE export / bake pipeline
-├── export_tables.py            # Doors / drawers / shelves engine tables
-├── blender_manifest.toml       # Add-on manifest and version
-├── gpl-3.0.txt                 # License file
-└── textures/                   # User PBR texture sets
-    ├── materials.txt           # Material-to-texture mapping
-    └── your_texture_files
-
-build_zip.py                    # Build the installable zip archive
-lock.py                         # File-based lock system for cooperative editing
-verify_*.py                     # Verification scripts
-probe_*.py                      # Geometry probes and diagnostic checks
-CODE_MAP.md                     # Detailed code map
-FILES.md                        # Project file map
-AGENT_NOTES.md                  # Durable project notes
-AGENT_TASKS.md                  # Work tracking and status
-HISTORY.md                      # Development changelog
-README.ru.md                    # Russian version of this README
-```
-
-For detailed function-level documentation, see `CODE_MAP.md`.
 
 ## Section Types
 
@@ -150,18 +112,6 @@ To add custom PBR materials:
 3. Update `Files/textures/materials.txt` to map material names to the texture sets
 4. Material nodes are automatically linked when the model is generated
 
-## Development and Validation
-
-Run validation checks from the project root:
-
-```bash
-blender --background --python-exit-code 1 --python verify_shelves.py
-blender --background --python-exit-code 1 --python verify_fbx.py
-cmd /c build_zip.cmd
-```
-
-See `AGENT_NOTES.md` for repository-specific rules, conventions, and validation details.
-
 ## Design Notes
 
 ### Colliders
@@ -190,7 +140,6 @@ strings → core → mesh_ops → primitives → solver
         debug_scenes ← panels ← __init__.py
 ```
 
-See `AGENT_NOTES.md` for the exact rules and caveats.
 
 ## License
 
@@ -202,7 +151,7 @@ hardway777 — https://github.com/hardway777
 
 ## Support
 
-For issues or feature requests, open an issue in the repository.
+For issues or feature requests, open an issue in the repository. https://github.com/hardway777/Furniture-Generator/issues
 
 ---
 
