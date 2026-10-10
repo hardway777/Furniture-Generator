@@ -6,7 +6,7 @@ name = "Furniture Modular Generator"
 tagline = "Modular furniture: Kitchens, Wardrobes, TV consoles, Dressers"
 maintainer = "Hardway"
 type = "add-on"
-
+support = "https://github.com/hardway777/Furniture-Generator/issues"
 blender_version_min = "4.4.0"
 
 license = [
